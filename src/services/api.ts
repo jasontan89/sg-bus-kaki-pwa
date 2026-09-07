@@ -68,7 +68,7 @@ export async function fetchNearbyStops(
   // Resilient Offline Fallback: Compute distances from pre-seeded stops catalog
   const stopsWithDist = SEED_BUS_STOPS.map((s) => ({
     ...s,
-    distance: calculateHaversineDistanceMeters(lat, lon, s.latitude, s.longitude),
+    distance: calculateHaversineDistanceMeters(lat, lon, s.latitude, s.longitude) ?? undefined,
   }));
 
   stopsWithDist.sort((a, b) => (a.distance || 0) - (b.distance || 0));

@@ -5,9 +5,10 @@ import {
   requestNotificationPermission,
   subscribeToPush,
   serializeSubscription,
+  dispatchNativeNotification,
 } from '../services/pushManager';
 import { registerPushSubscription, fetchVapidPublicKey } from '../services/api';
-import { playGentleTransitChime } from '../services/alarmManager';
+import { playGentleTransitChime, unlockAudio } from '../services/alarmManager';
 
 interface AlertsViewProps {
   onShowToast: (text: string, type?: 'success' | 'error' | 'info') => void;
@@ -101,17 +102,19 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ onShowToast }) => {
     onShowToast(`Filter set to: ${filter === 'major' ? 'Major disruptions only' : 'All advisories'}`, 'info');
   };
 
-  const handleTestLocalNotification = () => {
+  const handleTestLocalNotification = async () => {
+    unlockAudio();
     playGentleTransitChime();
-    if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification('🚌 Bus Kaki Alert', {
-        body: 'Bus 65 is arriving in 2 minutes at Hotel Grand Pacific!',
-        icon: '/icon-192.png',
-        badge: '/favicon.svg',
-      });
-      onShowToast('Sample notification dispatched!', 'success');
+    const sent = await dispatchNativeNotification('🚌 Bus Kaki Alert', {
+      body: 'Bus 65 is arriving in 2 minutes at Hotel Grand Pacific!',
+      icon: '/bus-mascot.svg',
+      badge: '/bus-mascot.svg',
+      vibrate: [500, 250, 500, 250, 1000],
+    });
+    if (sent) {
+      onShowToast('Sample native notification dispatched!', 'success');
     } else {
-      onShowToast('Sound chime played! Enable push to see system banner.', 'info');
+      onShowToast('Prolonged chime played! Enable push/notifications for native lock-screen banner.', 'info');
     }
   };
 

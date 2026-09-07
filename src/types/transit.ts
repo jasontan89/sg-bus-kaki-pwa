@@ -50,6 +50,8 @@ export interface BusRouteStop {
   sun_last_bus: string;
   description?: string;
   road_name?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 export type MRTLineCode = 'NSL' | 'EWL' | 'CCL' | 'DTL' | 'NEL' | 'TEL';

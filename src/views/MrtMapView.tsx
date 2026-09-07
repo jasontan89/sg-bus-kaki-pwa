@@ -128,7 +128,7 @@ export const MrtMapView: React.FC = () => {
   };
 
   return (
-    <div className={`space-y-3 pb-24 ${isFullscreen ? 'fixed inset-0 z-50 bg-black p-2 pb-6' : ''}`}>
+    <div className={`space-y-3 pb-24 ${isFullscreen ? 'fixed inset-0 z-[9995] bg-black p-2 pb-6' : ''}`}>
       {/* View Header */}
       {!isFullscreen && (
         <div className="flex items-center justify-between px-1">

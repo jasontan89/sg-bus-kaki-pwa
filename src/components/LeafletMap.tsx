@@ -24,6 +24,7 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const userMarkerRef = useRef<L.CircleMarker | null>(null);
+  const hasAutoCenteredRef = useRef(false);
 
   // Initialize Leaflet map
   useEffect(() => {
@@ -52,6 +53,15 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
       const markersGroup = L.layerGroup().addTo(map);
       markersLayerRef.current = markersGroup;
       mapInstanceRef.current = map;
+
+      // Ensure proper tile rendering dimensions on mobile PWA mount
+      setTimeout(() => {
+        try {
+          map.invalidateSize();
+        } catch {
+          // safe fail
+        }
+      }, 250);
     }
 
     return () => {
@@ -62,10 +72,16 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
     };
   }, []);
 
-  // Update commuter GPS location marker
+  // Update commuter GPS location marker and auto-jump to current location
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || userLat === null || userLon === null) return;
+
+    // Auto-jump to current location on first GPS fix!
+    if (!hasAutoCenteredRef.current && userLat > 1.0 && userLon > 100.0) {
+      map.setView([userLat, userLon], 16, { animate: true });
+      hasAutoCenteredRef.current = true;
+    }
 
     if (userMarkerRef.current) {
       userMarkerRef.current.setLatLng([userLat, userLon]);

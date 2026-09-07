@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BusStop, BusRouteStop, BusArrivalData } from '../types/transit';
 import { searchBusStops, fetchBusRoute, fetchBusArrivals } from '../services/api';
 import { isFavorite, saveFavorite, removeFavorite } from '../services/offlineStorage';
+import { SEED_BUS_STOPS } from '../services/busStopsData';
 import { BusArrivalCard } from '../components/BusArrivalCard';
 import { SetArrivalAlarmModal } from '../components/SetArrivalAlarmModal';
 import { Search, MapPin, Route as RouteIcon, Star, RefreshCw, X, ArrowUpDown, Bell } from 'lucide-react';
@@ -219,15 +220,18 @@ export const SearchView: React.FC<SearchViewProps> = ({
           {routeStops.map((rStop, idx) => (
             <div
               key={rStop.stop_sequence || idx}
-              onClick={() =>
+              onClick={() => {
+                const seed = SEED_BUS_STOPS.find((s) => s.bus_stop_code === rStop.bus_stop_code);
+                const lat = rStop.latitude || seed?.latitude || 1.2968;
+                const lon = rStop.longitude || seed?.longitude || 103.8525;
                 handleSelectStop({
                   bus_stop_code: rStop.bus_stop_code,
-                  description: rStop.description || `Stop ${rStop.bus_stop_code}`,
-                  road_name: rStop.road_name || '',
-                  latitude: 1.35,
-                  longitude: 103.82,
-                })
-              }
+                  description: rStop.description || seed?.description || `Stop ${rStop.bus_stop_code}`,
+                  road_name: rStop.road_name || seed?.road_name || '',
+                  latitude: lat,
+                  longitude: lon,
+                });
+              }}
               className="bg-brand-dark/80 hover:bg-brand-dark border border-slate-800 hover:border-slate-700 rounded-xl p-3 shadow-md flex items-center justify-between cursor-pointer transition-all"
             >
               <div className="flex items-center space-x-3 min-w-0">
@@ -308,7 +312,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
 
       {/* Selected Stop Live Arrivals Drawer / Modal */}
       {selectedStop && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-150">
+        <div className="fixed inset-0 z-[9999] bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-150">
           <div className="bg-brand-card border border-slate-700 w-full max-w-md max-h-[80vh] overflow-y-auto rounded-2xl p-5 shadow-2xl space-y-3 animate-in slide-in-from-bottom-6 duration-200">
             {/* Header */}
             <div className="flex items-start justify-between">

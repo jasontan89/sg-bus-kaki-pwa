@@ -13,9 +13,11 @@ import {
   calculateHaversineDistanceMeters,
   startContinuousChime,
   stopContinuousChime,
+  unlockAudio,
   requestScreenWakeLock,
   releaseScreenWakeLock,
 } from './services/alarmManager';
+import { dispatchNativeNotification } from './services/pushManager';
 import { seedBusStops, getCachedStopsCount, getFavorites } from './services/offlineStorage';
 import { SEED_BUS_STOPS } from './services/busStopsData';
 
@@ -133,11 +135,19 @@ export const App: React.FC = () => {
       if (!prev.armed) return prev;
 
       const dist = calculateHaversineDistanceMeters(lat, lon, prev.targetLat, prev.targetLon);
-      const isNowTriggered = dist <= prev.thresholdMeters;
+      const isNowTriggered = dist !== null && dist <= prev.thresholdMeters;
 
       // When first entering proximity
       if (isNowTriggered && !prev.isTriggered) {
         startContinuousChime();
+        dispatchNativeNotification(`⏰ Alight Now: ${prev.stopName}`, {
+          body: `You are within ${prev.thresholdMeters}m of ${prev.stopName}! Prepare to alight now.`,
+          icon: '/bus-mascot.svg',
+          badge: '/bus-mascot.svg',
+          tag: 'alight-now-alert',
+          renotify: true,
+          vibrate: [500, 250, 500, 250, 1000],
+        });
         showToast(`⏰ You are within ${prev.thresholdMeters}m of ${prev.stopName}! Prepare to alight.`, 'error');
       }
 
@@ -156,9 +166,8 @@ export const App: React.FC = () => {
       updateLocation,
       (err) => {
         console.warn('Geolocation initial error:', err);
-        // Fallback default: Downtown Singapore
-        setUserLat(1.2968);
-        setUserLon(103.8525);
+        // Do not force fake City Hall coordinates on error;
+        // keeping userLat null lets remaining distance display 'Acquiring GPS...'
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
@@ -183,25 +192,47 @@ export const App: React.FC = () => {
 
   // Arm Alighting Wake-Up Alarm
   const handleArmAlightAlarm = async (stop: BusStop) => {
-    const currentLat = userLat || 1.2968;
-    const currentLon = userLon || 103.8525;
-    const initialDist = calculateHaversineDistanceMeters(
-      currentLat,
-      currentLon,
-      stop.latitude,
-      stop.longitude
-    );
+    // 1. Crucial for mobile audio: unlock Web Audio Context during direct user touch gesture
+    unlockAudio();
+
+    // 2. Request native notification permission if not yet determined
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      try {
+        await Notification.requestPermission();
+      } catch {
+        // Safe fail
+      }
+    }
+
+    // 3. Resolve exact coordinates (fallback to SEED_BUS_STOPS catalog if missing or dummy)
+    let targetLat = Number(stop.latitude);
+    let targetLon = Number(stop.longitude);
+    if (!targetLat || !targetLon || (targetLat === 1.35 && targetLon === 103.82)) {
+      const seed = SEED_BUS_STOPS.find((s) => s.bus_stop_code === stop.bus_stop_code);
+      if (seed) {
+        targetLat = Number(seed.latitude);
+        targetLon = Number(seed.longitude);
+      }
+    }
+
+    // 4. Compute initial distance if GPS is currently acquired
+    const initialDist =
+      userLat !== null && userLon !== null
+        ? calculateHaversineDistanceMeters(userLat, userLon, targetLat, targetLon)
+        : null;
+
+    const isTriggered = initialDist !== null && initialDist <= 500;
 
     const newState: AlightingAlarmState = {
       armed: true,
       stopCode: stop.bus_stop_code,
       stopName: stop.description,
       roadName: stop.road_name,
-      targetLat: stop.latitude,
-      targetLon: stop.longitude,
+      targetLat,
+      targetLon,
       thresholdMeters: 500,
       currentDistanceMeters: initialDist,
-      isTriggered: initialDist <= 500,
+      isTriggered,
       keepScreenAwake: true,
     };
 
@@ -209,6 +240,18 @@ export const App: React.FC = () => {
     await requestScreenWakeLock();
     setActiveTab('hud');
     showToast(`Alight alarm armed for ${stop.description}!`, 'success');
+
+    // If commuter is already at destination upon arming
+    if (isTriggered) {
+      startContinuousChime();
+      dispatchNativeNotification(`⏰ Alight Now: ${stop.description}`, {
+        body: `You are already within 500m of ${stop.description}!`,
+        icon: '/bus-mascot.svg',
+        tag: 'alight-now-alert',
+        renotify: true,
+        vibrate: [500, 250, 500, 250, 1000],
+      });
+    }
   };
 
   const handleStopAlarm = async () => {

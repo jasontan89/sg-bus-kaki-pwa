@@ -121,3 +121,69 @@ export function serializeSubscription(subscription: PushSubscription) {
     },
   };
 }
+
+/**
+ * Dispatches a native OS notification.
+ * On modern Android Chrome, new Notification() in window scope is forbidden and throws:
+ * "Failed to construct 'Notification': Illegal constructor. Use ServiceWorkerRegistration.showNotification() instead."
+ * This helper uses navigator.serviceWorker.ready.showNotification() to guarantee native lock-screen delivery.
+ */
+export async function dispatchNativeNotification(
+  title: string,
+  options: any = {}
+): Promise<boolean> {
+  // Trigger tactile vibration immediately if supported
+  if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+    try {
+      navigator.vibrate(options.vibrate || [500, 250, 500, 250, 1000]);
+    } catch {
+      // Safe fail
+    }
+  }
+
+  // Check notification support
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return false;
+  }
+
+  // Request or check permission
+  if (Notification.permission !== 'granted') {
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') return false;
+    } catch {
+      return false;
+    }
+  }
+
+  const defaultOptions: any = {
+    icon: '/bus-mascot.svg',
+    badge: '/bus-mascot.svg',
+    vibrate: [500, 250, 500, 250, 1000],
+    requireInteraction: true,
+    ...options,
+  };
+
+  // Primary: Use Service Worker registration (Android Chrome requirement)
+  if ('serviceWorker' in navigator) {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      if (reg && typeof reg.showNotification === 'function') {
+        await reg.showNotification(title, defaultOptions);
+        return true;
+      }
+    } catch (swErr) {
+      console.warn('SW showNotification fallback needed:', swErr);
+    }
+  }
+
+  // Fallback: Window Notification for desktop browsers
+  try {
+    new Notification(title, defaultOptions);
+    return true;
+  } catch (winErr) {
+    console.warn('Window Notification failed:', winErr);
+  }
+
+  return false;
+}

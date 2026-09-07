@@ -14,6 +14,7 @@ import {
 import {
   formatDistance,
   playGentleTransitChime,
+  unlockAudio,
   requestScreenWakeLock,
   releaseScreenWakeLock,
 } from '../services/alarmManager';
@@ -61,7 +62,7 @@ export const ActiveRideHUD: React.FC<ActiveRideHUDProps> = ({
   );
 
   return (
-    <div className="fixed inset-0 z-50 bg-black text-slate-100 flex flex-col justify-between p-5 select-none overflow-y-auto pt-safe pb-safe">
+    <div className="fixed inset-0 z-[9999] bg-black text-slate-100 flex flex-col justify-between p-5 select-none overflow-y-auto pt-safe pb-safe">
       {/* HUD Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-2">
@@ -196,7 +197,10 @@ export const ActiveRideHUD: React.FC<ActiveRideHUDProps> = ({
 
           {/* Gentle Chime Audio Test Button */}
           <button
-            onClick={playGentleTransitChime}
+            onClick={() => {
+              unlockAudio();
+              playGentleTransitChime();
+            }}
             className="py-2.5 px-3 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-300 flex items-center justify-center space-x-2 active:scale-95 transition-all"
             title="Preview the calm chime sound"
           >

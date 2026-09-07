@@ -263,11 +263,11 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ stops: [] });
       }
 
-      // Fetch stop descriptions
+      // Fetch stop descriptions and coordinates
       const stopCodes = routes.map((r: any) => r.bus_stop_code);
       const { data: stops } = await supabase
         .from('lta_bus_stops')
-        .select('bus_stop_code, description, road_name')
+        .select('bus_stop_code, description, road_name, latitude, longitude')
         .in('bus_stop_code', stopCodes);
 
       const stopMap = new Map((stops || []).map((s: any) => [s.bus_stop_code, s]));
@@ -278,6 +278,8 @@ Deno.serve(async (req: Request) => {
           ...r,
           description: s?.description || `Stop ${r.bus_stop_code}`,
           road_name: s?.road_name || '',
+          latitude: s?.latitude,
+          longitude: s?.longitude,
         };
       });
 

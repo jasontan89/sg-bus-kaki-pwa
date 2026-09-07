@@ -27,7 +27,7 @@ export const Navigation: React.FC<NavigationProps> = ({
   ];
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 pb-[env(safe-area-inset-bottom,0px)] pointer-events-none">
+    <div className="fixed bottom-0 left-0 right-0 z-[9990] pb-[env(safe-area-inset-bottom,0px)] pointer-events-none">
       <div className="max-w-md mx-auto px-4 pb-2">
         {/* Active Ride HUD Floating Banner (When Commute Alarm is Armed) */}
         {alightAlarm.armed && (

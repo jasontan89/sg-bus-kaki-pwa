@@ -27,7 +27,7 @@ export const BusFilterModal: React.FC<BusFilterModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-[9999] bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-150">
       <div className="bg-brand-card border border-slate-700 w-full max-w-sm rounded-2xl p-5 shadow-2xl animate-in slide-in-from-bottom-6 duration-200">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center space-x-2">
