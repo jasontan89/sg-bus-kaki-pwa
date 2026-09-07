@@ -4,7 +4,7 @@ import { searchBusStops, fetchBusRoute, fetchBusArrivals } from '../services/api
 import { isFavorite, saveFavorite, removeFavorite } from '../services/offlineStorage';
 import { BusArrivalCard } from '../components/BusArrivalCard';
 import { SetArrivalAlarmModal } from '../components/SetArrivalAlarmModal';
-import { Search, MapPin, Route as RouteIcon, Star, Navigation, RefreshCw, X, ArrowUpDown } from 'lucide-react';
+import { Search, MapPin, Route as RouteIcon, Star, RefreshCw, X, ArrowUpDown, Bell } from 'lucide-react';
 
 interface SearchViewProps {
   initialServiceNo?: string;
@@ -286,10 +286,11 @@ export const SearchView: React.FC<SearchViewProps> = ({
                   e.stopPropagation();
                   onArmAlightAlarm(stop);
                 }}
-                className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-brand-sky hover:bg-slate-800 shrink-0"
-                title="Arm Alight Alarm"
+                className="flex items-center space-x-1 px-2 py-1 rounded-lg bg-brand-sky/15 border border-brand-sky/30 text-brand-sky hover:bg-brand-sky/25 text-[11px] font-bold shrink-0 active:scale-95 transition-all"
+                title="Arm Alight Alert for this stop"
               >
-                <Navigation className="w-4 h-4" />
+                <Bell className="w-3.5 h-3.5" />
+                <span>Alight</span>
               </button>
             </div>
           ))}
@@ -322,6 +323,17 @@ export const SearchView: React.FC<SearchViewProps> = ({
               </div>
 
               <div className="flex items-center space-x-1.5">
+                <button
+                  onClick={() => {
+                    onArmAlightAlarm(selectedStop);
+                    setSelectedStop(null);
+                  }}
+                  className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-brand-sky/15 border border-brand-sky/40 text-brand-sky hover:bg-brand-sky/25 text-xs font-bold active:scale-95 transition-all"
+                  title="Arm Alighting Wake-up Alarm"
+                >
+                  <Bell className="w-3.5 h-3.5" />
+                  <span>Alight Alert</span>
+                </button>
                 <button
                   onClick={handleToggleFavorite}
                   className={`p-1.5 rounded-lg border ${

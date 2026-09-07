@@ -291,6 +291,12 @@ export const App: React.FC = () => {
           onUpdateKeepAwake={(enabled) =>
             setAlightAlarm((prev) => ({ ...prev, keepScreenAwake: enabled }))
           }
+          onUpdateThreshold={(meters) =>
+            setAlightAlarm((prev) => {
+              const triggered = (prev.currentDistanceMeters ?? 9999) <= meters;
+              return { ...prev, thresholdMeters: meters, isTriggered: triggered };
+            })
+          }
           onCloseHUD={() => setActiveTab('nearby')}
         />
       )}

@@ -6,7 +6,7 @@ import { LeafletMap } from '../components/LeafletMap';
 import { BusArrivalCard } from '../components/BusArrivalCard';
 import { BusFilterModal } from '../components/BusFilterModal';
 import { SetArrivalAlarmModal } from '../components/SetArrivalAlarmModal';
-import { Star, RefreshCw, MapPin, Filter, Navigation } from 'lucide-react';
+import { Star, RefreshCw, MapPin, Filter, Bell } from 'lucide-react';
 
 interface NearbyViewProps {
   userLat: number | null;
@@ -201,10 +201,11 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
               {/* Alighting Alarm Trigger */}
               <button
                 onClick={() => onArmAlightAlarm(selectedStop)}
-                className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-brand-sky text-brand-sky active:scale-95 transition-all"
+                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-brand-sky/15 border border-brand-sky/40 text-brand-sky hover:bg-brand-sky/25 active:scale-95 transition-all text-xs font-bold"
                 title="Arm Alighting Wake-up Alarm for this stop"
               >
-                <Navigation className="w-4 h-4" />
+                <Bell className="w-3.5 h-3.5" />
+                <span>Alight Alert</span>
               </button>
 
               {/* Service Filter */}

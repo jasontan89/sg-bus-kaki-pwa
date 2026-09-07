@@ -4,7 +4,7 @@ import { getFavorites, removeFavorite, saveFavorite } from '../services/offlineS
 import { fetchBusArrivals } from '../services/api';
 import { BusArrivalCard } from '../components/BusArrivalCard';
 import { SetArrivalAlarmModal } from '../components/SetArrivalAlarmModal';
-import { Star, RefreshCw, Trash2, Edit2, Check, Navigation, ChevronDown, ChevronUp } from 'lucide-react';
+import { Star, RefreshCw, Trash2, Edit2, Check, ChevronDown, ChevronUp, Bell } from 'lucide-react';
 
 interface FavoritesViewProps {
   onArmAlightAlarm: (stop: BusStop) => void;
@@ -198,10 +198,11 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                           longitude: fav.longitude,
                         });
                       }}
-                      className="p-1.5 rounded-lg text-brand-sky hover:bg-slate-800"
-                      title="Arm Alight Alarm"
+                      className="flex items-center space-x-1 px-2 py-1 rounded-lg bg-brand-sky/15 border border-brand-sky/30 text-brand-sky hover:bg-brand-sky/25 text-[11px] font-bold active:scale-95 transition-all"
+                      title="Arm Alight Alert for this stop"
                     >
-                      <Navigation className="w-4 h-4" />
+                      <Bell className="w-3.5 h-3.5" />
+                      <span>Alight</span>
                     </button>
                     <button
                       onClick={() => {

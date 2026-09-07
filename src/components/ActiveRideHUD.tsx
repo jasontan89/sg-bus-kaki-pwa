@@ -22,6 +22,7 @@ interface ActiveRideHUDProps {
   alarmState: AlightingAlarmState;
   onStopAlarm: () => void;
   onUpdateKeepAwake: (enabled: boolean) => void;
+  onUpdateThreshold?: (meters: number) => void;
   onCloseHUD: () => void;
 }
 
@@ -29,6 +30,7 @@ export const ActiveRideHUD: React.FC<ActiveRideHUDProps> = ({
   alarmState,
   onStopAlarm,
   onUpdateKeepAwake,
+  onUpdateThreshold,
   onCloseHUD,
 }) => {
   const {
@@ -154,7 +156,29 @@ export const ActiveRideHUD: React.FC<ActiveRideHUDProps> = ({
       </div>
 
       {/* Commuter Settings & Actions */}
-      <div className="space-y-3">
+      <div className="space-y-2.5">
+        {/* Distance Threshold Selector */}
+        {onUpdateThreshold && (
+          <div className="flex items-center justify-between bg-slate-950/80 p-2 rounded-xl border border-slate-900">
+            <span className="text-[11px] text-slate-400 font-medium pl-1">Alert me within:</span>
+            <div className="flex space-x-1.5">
+              {[300, 500, 800].map((dist) => (
+                <button
+                  key={dist}
+                  onClick={() => onUpdateThreshold(dist)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                    thresholdMeters === dist
+                      ? 'bg-brand-sky text-brand-navy'
+                      : 'bg-slate-900 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {dist}m
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Controls Bar */}
         <div className="grid grid-cols-2 gap-2">
           {/* Keep Screen Awake Toggle */}
