@@ -62,7 +62,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
 
         // If query looks like a bus service number (e.g. 1-4 digits/letters like 65, 190, 857, 960e)
         if (/^[0-9]{1,3}[a-zA-Z]?$/.test(q)) {
-          handleSearchRoute(q, routeDirection);
+          await handleSearchRoute(q, routeDirection);
         }
       } catch (err) {
         console.error('Search error:', err);

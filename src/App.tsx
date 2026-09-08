@@ -195,10 +195,10 @@ export const App: React.FC = () => {
     // 1. Crucial for mobile audio: unlock Web Audio Context during direct user touch gesture
     unlockAudio();
 
-    // 2. Request native notification permission if not yet determined
+    // 2. Request native notification permission if not yet determined (non-blocking)
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
       try {
-        await Notification.requestPermission();
+        Notification.requestPermission().catch(() => {});
       } catch {
         // Safe fail
       }
@@ -237,7 +237,7 @@ export const App: React.FC = () => {
     };
 
     setAlightAlarm(newState);
-    await requestScreenWakeLock();
+    requestScreenWakeLock().catch(() => {});
     setActiveTab('hud');
     showToast(`Alight alarm armed for ${stop.description}!`, 'success');
 
