@@ -3,8 +3,12 @@ import { searchOfflineBusStops } from './offlineStorage';
 import { calculateHaversineDistanceMeters } from './alarmManager';
 import { SEED_BUS_STOPS } from './busStopsData';
 
-const BASE_API_URL = import.meta.env.VITE_PWA_API_URL || '';
-const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const BASE_API_URL =
+  import.meta.env.VITE_PWA_API_URL ||
+  'https://blcsjvifiytbznwesmyx.supabase.co/functions/v1/pwa_api';
+const ANON_KEY =
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsY3NqdmlmaXl0Ynpud2VzbXl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MTkzNDcsImV4cCI6MjA5ODM5NTM0N30.PhO08MviDmKyRn941IngM9-WaG_j7lwiCL5IqzG5qt0';
 
 const defaultHeaders: Record<string, string> = {
   'Content-Type': 'application/json',

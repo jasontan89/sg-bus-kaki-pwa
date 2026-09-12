@@ -5,6 +5,10 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "https://blcsjvifiytbznwesmyx.supabase.co/functions/v1/pwa_api/api/:path*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

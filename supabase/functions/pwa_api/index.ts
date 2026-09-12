@@ -20,24 +20,9 @@ const VAPID_PUBLIC_KEY =
   'BHSw8VkpCSgUdC1_XRhHMvLMdm7w-VhRH_tahYM2ZXOBAhQ2A80SPwEvakojni6fs7gT3R_ke7ZKspb6w79rBw8';
 
 function getCorsHeaders(req: Request) {
-  const origin = req.headers.get('origin') || '';
-  const customOrigin = Deno.env.get('ALLOWED_ORIGIN');
-  let allowedOrigin = '*';
-
-  if (customOrigin) {
-    allowedOrigin = customOrigin;
-  } else if (origin) {
-    if (
-      origin.includes('vercel.app') ||
-      origin.includes('localhost') ||
-      origin.includes('127.0.0.1')
-    ) {
-      allowedOrigin = origin;
-    }
-  }
-
+  const origin = req.headers.get('origin') || '*';
   return {
-    'Access-Control-Allow-Origin': allowedOrigin,
+    'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
   };
