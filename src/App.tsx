@@ -13,6 +13,8 @@ import {
   calculateHaversineDistanceMeters,
   startContinuousChime,
   stopContinuousChime,
+  startBackgroundAudioKeepAlive,
+  stopBackgroundAudioKeepAlive,
   unlockAudio,
   requestScreenWakeLock,
   releaseScreenWakeLock,
@@ -238,6 +240,7 @@ export const App: React.FC = () => {
 
     setAlightAlarm(newState);
     requestScreenWakeLock().catch(() => {});
+    startBackgroundAudioKeepAlive(stop.description);
     setActiveTab('hud');
     showToast(`Alight alarm armed for ${stop.description}!`, 'success');
 
@@ -256,6 +259,7 @@ export const App: React.FC = () => {
 
   const handleStopAlarm = async () => {
     stopContinuousChime();
+    stopBackgroundAudioKeepAlive();
     await releaseScreenWakeLock();
     setAlightAlarm((prev) => ({
       ...prev,

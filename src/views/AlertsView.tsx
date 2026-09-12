@@ -7,8 +7,9 @@ import {
   serializeSubscription,
   dispatchNativeNotification,
 } from '../services/pushManager';
-import { registerPushSubscription, fetchVapidPublicKey } from '../services/api';
+import { registerPushSubscription, fetchVapidPublicKey, sendTestPushNotification } from '../services/api';
 import { playGentleTransitChime, unlockAudio } from '../services/alarmManager';
+import { Send, Loader2 } from 'lucide-react';
 
 interface AlertsViewProps {
   onShowToast: (text: string, type?: 'success' | 'error' | 'info') => void;
@@ -28,6 +29,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ onShowToast }) => {
   const [selectedLines, setSelectedLines] = useState<string[]>(['NSL', 'EWL']);
   const [alertFilter, setAlertFilter] = useState<'major' | 'all'>('major');
   const [loading, setLoading] = useState(false);
+  const [testingCloudPush, setTestingCloudPush] = useState(false);
 
   useEffect(() => {
     setPermission(getNotificationPermission());
@@ -61,7 +63,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ onShowToast }) => {
           mrt_lines: selectedLines,
           alert_filter: alertFilter,
         });
-        onShowToast('Web Push enabled! You will receive transit alerts.', 'success');
+        onShowToast('Web Push enabled! Stale subscriptions rotated.', 'success');
       }
     } catch (err: any) {
       console.error('Push error:', err);
@@ -112,9 +114,52 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ onShowToast }) => {
       vibrate: [500, 250, 500, 250, 1000],
     });
     if (sent) {
-      onShowToast('Sample native notification dispatched!', 'success');
+      onShowToast('Sample local notification & chime dispatched!', 'success');
     } else {
-      onShowToast('Prolonged chime played! Enable push/notifications for native lock-screen banner.', 'info');
+      onShowToast('Prolonged chime played! Enable notifications for native lock-screen banner.', 'info');
+    }
+  };
+
+  const handleTestServerPush = async () => {
+    setTestingCloudPush(true);
+    try {
+      // 1. Check permission
+      const perm = await requestNotificationPermission();
+      setPermission(perm);
+      if (perm !== 'granted') {
+        onShowToast('Please enable notifications to receive alerts.', 'error');
+        return;
+      }
+
+      // 2. Refresh / rotate subscription with current active VAPID key
+      const vapidKey = await fetchVapidPublicKey();
+      const sub = await subscribeToPush(vapidKey);
+      if (!sub) {
+        onShowToast('Failed to create push subscription on device.', 'error');
+        return;
+      }
+
+      // 3. Sync to Supabase
+      const serialized = serializeSubscription(sub);
+      await registerPushSubscription({
+        ...serialized,
+        mrt_lines: selectedLines,
+        alert_filter: alertFilter,
+      });
+
+      // 4. Send test push from Supabase server
+      onShowToast('Dispatching test alert from cloud... Lock your screen now!', 'info');
+      const res = await sendTestPushNotification(sub.endpoint);
+      if (res.ok) {
+        onShowToast('Cloud Web Push delivered! Check your phone lock screen. 🔔✨', 'success');
+      } else {
+        onShowToast(`Cloud push note: ${res.error || 'Check server status'}`, 'error');
+      }
+    } catch (err: any) {
+      console.error('Test server push failed:', err);
+      onShowToast(err.message || 'Failed to dispatch cloud test push', 'error');
+    } finally {
+      setTestingCloudPush(false);
     }
   };
 
@@ -174,14 +219,32 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ onShowToast }) => {
           </p>
         </div>
 
-        {/* Test Notification Button */}
-        <button
-          onClick={handleTestLocalNotification}
-          className="w-full py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-200 flex items-center justify-center space-x-1.5 active:scale-95 transition-all"
-        >
-          <Bell className="w-3.5 h-3.5 text-brand-sky" />
-          <span>Test Notification & Gentle Chime</span>
-        </button>
+        {/* Dual Test Action Buttons */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+          {/* Cloud Push Test */}
+          <button
+            onClick={handleTestServerPush}
+            disabled={testingCloudPush}
+            className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-brand-blue/30 to-brand-sky/30 border border-brand-sky/50 hover:bg-brand-blue/40 text-xs font-bold text-brand-sky flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow-sm"
+            title="Sends a real push notification through Google FCM from the server"
+          >
+            {testingCloudPush ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-sky" />
+            ) : (
+              <Send className="w-3.5 h-3.5 text-brand-sky" />
+            )}
+            <span>Test Cloud Push (Screen Off)</span>
+          </button>
+
+          {/* Local Audio Chime & Notification Preview */}
+          <button
+            onClick={handleTestLocalNotification}
+            className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-300 flex items-center justify-center space-x-1.5 active:scale-95 transition-all"
+          >
+            <Bell className="w-3.5 h-3.5 text-slate-400" />
+            <span>Test Chime & Sound</span>
+          </button>
+        </div>
       </div>
 
       {/* MRT Lines Disruption Push Alerts */}

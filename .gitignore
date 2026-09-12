@@ -19,4 +19,5 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
+# Supabase CLI temp
+supabase/.temp/

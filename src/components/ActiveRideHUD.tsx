@@ -89,9 +89,14 @@ export const ActiveRideHUD: React.FC<ActiveRideHUDProps> = ({
       {/* AMOLED Power Saver Notice & Screen Freedom */}
       <div className="my-3 p-3 rounded-xl bg-slate-900/80 border border-slate-800 text-[11px] text-slate-400 flex items-start space-x-2.5">
         <Info className="w-4 h-4 text-brand-sky shrink-0 mt-0.5" />
-        <p className="leading-relaxed">
-          <strong className="text-slate-200">Phone Screen Freedom:</strong> You can freely lock your phone screen or switch apps anytime. The alarm will sound its gentle chime when you arrive.
-        </p>
+        <div className="leading-relaxed space-y-1">
+          <p>
+            <strong className="text-slate-200">Recommended for Long Rides:</strong> Keep this pitch-black OLED HUD on your screen. Pure black pixels consume less than 2% battery per hour while guaranteeing instant GPS tracking.
+          </p>
+          <p className="text-slate-400">
+            <strong className="text-brand-sky">Background Mode:</strong> Background Audio GPS Shield is active to keep Android from freezing location updates when you switch apps or lock your phone.
+          </p>
+        </div>
       </div>
 
       {/* Main Destination & Distance Display */}

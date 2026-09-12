@@ -41,7 +41,8 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array {
 }
 
 /**
- * Subscribes commuter device to Web Push via Service Worker
+ * Subscribes commuter device to Web Push via Service Worker.
+ * Automatically validates and rotates stale subscriptions if the backend VAPID key changed.
  */
 export async function subscribeToPush(vapidPublicKey: string): Promise<PushSubscription | null> {
   if (!isPushSupported()) {
@@ -56,13 +57,42 @@ export async function subscribeToPush(vapidPublicKey: string): Promise<PushSubsc
 
   const registration = await navigator.serviceWorker.ready;
   let subscription = await registration.pushManager.getSubscription();
+  const targetKeyBytes = urlBase64ToUint8Array(vapidPublicKey);
+
+  // If subscription already exists, check if it was signed with the current VAPID key
+  if (subscription) {
+    try {
+      const existingKey = subscription.options?.applicationServerKey;
+      let isKeyMatch = false;
+
+      if (existingKey) {
+        const existingBytes = new Uint8Array(existingKey);
+        if (existingBytes.length === targetKeyBytes.length) {
+          isKeyMatch = existingBytes.every((b, i) => b === targetKeyBytes[i]);
+        }
+      }
+
+      // If the VAPID key differs (e.g. after security rotation), unsubscribe stale endpoint
+      if (!isKeyMatch) {
+        console.info('Stale VAPID key subscription detected. Rotating to current credentials...');
+        await subscription.unsubscribe();
+        subscription = null;
+      }
+    } catch (checkErr) {
+      console.warn('Could not verify existing subscription key, refreshing:', checkErr);
+      if (subscription) {
+        await (subscription as PushSubscription).unsubscribe().catch(() => {});
+        subscription = null;
+      }
+    }
+  }
 
   if (!subscription) {
-    const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
     subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: convertedVapidKey as any,
+      applicationServerKey: targetKeyBytes as any,
     });
+    console.info('Fresh Web Push subscription created successfully with active VAPID key.');
   }
 
   return subscription;

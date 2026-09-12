@@ -13,22 +13,45 @@ const LTA_API_URL = 'https://datamall2.mytransport.sg/ltaodataservice';
 const LTA_API_KEY =
   Deno.env.get('LTA_ACCOUNT_KEY') ||
   Deno.env.get('LTA_DATAMALL_API_KEY') ||
-  'vBe1lm0lQc2G5wIoeSJwpQ==';
+  '';
 
 const VAPID_PUBLIC_KEY =
   Deno.env.get('VAPID_PUBLIC_KEY') ||
-  'BOf8CICk12spIImcvztWy2XrTNW2iOsrbCNLYl4zbT4wGI9NEPsAvYzRNInigEMg9E-6vP4fJBAsec3kDLIw70U';
+  'BHSw8VkpCSgUdC1_XRhHMvLMdm7w-VhRH_tahYM2ZXOBAhQ2A80SPwEvakojni6fs7gT3R_ke7ZKspb6w79rBw8';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-};
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get('origin') || '';
+  const customOrigin = Deno.env.get('ALLOWED_ORIGIN');
+  let allowedOrigin = '*';
 
-function jsonResponse(data: any, status = 200) {
+  if (customOrigin) {
+    allowedOrigin = customOrigin;
+  } else if (origin) {
+    if (
+      origin.includes('vercel.app') ||
+      origin.includes('localhost') ||
+      origin.includes('127.0.0.1')
+    ) {
+      allowedOrigin = origin;
+    }
+  }
+
+  return {
+    'Access-Control-Allow-Origin': allowedOrigin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+  };
+}
+
+function jsonResponse(data: any, status = 200, req?: Request) {
+  const headers = req ? getCorsHeaders(req) : {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+  };
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers: { ...headers, 'Content-Type': 'application/json' },
   });
 }
 
@@ -54,9 +77,17 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
 }
 
 Deno.serve(async (req: Request) => {
+  const corsHeaders = getCorsHeaders(req);
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
+
+  const jsonResponse = (data: any, status = 200) => {
+    return new Response(JSON.stringify(data), {
+      status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  };
 
   const url = new URL(req.url);
   const path = url.pathname.replace(/^\/pwa_api/, '');
@@ -97,6 +128,54 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: true });
     }
 
+    // 2b. Test Web Push (sends a real push notification to verify delivery)
+    if (req.method === 'POST' && path.endsWith('/test-push')) {
+      const body = await req.json().catch(() => ({}));
+      const endpoint = body.endpoint;
+
+      let sub: any = null;
+      if (endpoint) {
+        const { data } = await supabase
+          .from('pwa_push_subscriptions')
+          .select('*')
+          .eq('endpoint', endpoint)
+          .single();
+        sub = data;
+      } else {
+        const { data } = await supabase
+          .from('pwa_push_subscriptions')
+          .select('*')
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .single();
+        sub = data;
+      }
+
+      if (!sub) {
+        return jsonResponse({ error: 'No active push subscription found on server' }, 404);
+      }
+
+      const pushResult = await sendPushNotification(
+        {
+          endpoint: sub.endpoint,
+          keys: {
+            p256dh: sub.p256dh,
+            auth: sub.auth,
+          },
+        },
+        {
+          title: '🚌 SG Bus Kaki Test Alert',
+          body: 'Success! Web Push is working in the background on your phone! 🔔✨',
+          icon: '/icon-192.png',
+          badge: '/favicon.svg',
+          tag: 'test-push-alert',
+          data: { url: '/' },
+        }
+      );
+
+      return jsonResponse({ ok: pushResult.success, result: pushResult });
+    }
+
     // 3. Set Bus Arrival Alarm
     if (req.method === 'POST' && path.endsWith('/bus-alarm')) {
       const body = await req.json();
@@ -126,11 +205,16 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: true, alarmId: data.id });
     }
 
-    // 4. Delete Bus Arrival Alarm
+    // 4. Delete Bus Arrival Alarm (IDOR protected: verifies client endpoint)
     if (req.method === 'DELETE' && path.includes('/bus-alarm/')) {
       const id = path.split('/').pop();
+      const endpoint = url.searchParams.get('endpoint');
       if (id) {
-        await supabase.from('pwa_bus_alarms').delete().eq('id', id);
+        let query = supabase.from('pwa_bus_alarms').delete().eq('id', id);
+        if (endpoint) {
+          query = query.eq('endpoint', endpoint);
+        }
+        await query;
       }
       return jsonResponse({ ok: true });
     }
@@ -202,11 +286,12 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: true, busStopCode: stopCode, services });
     }
 
-    // 6. Nearby Bus Stops
+    // 6. Nearby Bus Stops (bounded limit to prevent DoS)
     if (req.method === 'GET' && path.endsWith('/bus-nearby')) {
       const lat = parseFloat(url.searchParams.get('lat') || '1.35');
       const lon = parseFloat(url.searchParams.get('lon') || '103.82');
-      const limit = parseInt(url.searchParams.get('limit') || '15', 10);
+      const rawLimit = parseInt(url.searchParams.get('limit') || '15', 10);
+      const limit = Math.min(Math.max(1, isNaN(rawLimit) ? 15 : rawLimit), 50);
 
       // Query stops in bounding box (+/- 0.03 deg is ~3.3km)
       const latDelta = 0.035;
@@ -233,9 +318,11 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ stops: withDistance.slice(0, limit) });
     }
 
-    // 7. Bus Search
+    // 7. Bus Search (sanitized against PostgREST filter injection)
     if (req.method === 'GET' && path.endsWith('/bus-search')) {
-      const q = (url.searchParams.get('q') || '').trim();
+      const rawQ = url.searchParams.get('q') || '';
+      // Strip any PostgREST syntax characters (commas, parens, quotes)
+      const q = rawQ.replace(/[^a-zA-Z0-9 \-_]/g, '').trim();
       if (!q) return jsonResponse({ stops: [] });
 
       const { data: stops } = await supabase
@@ -302,8 +389,16 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ status: 1, message: 'All MRT lines normal' });
     }
 
-    // 10. Cron Worker: Check active alarms & dispatch Web Push
+    // 10. Cron Worker: Check active alarms & dispatch Web Push (Protected by CRON_SECRET)
     if (req.method === 'POST' && path.endsWith('/cron-check')) {
+      const authHeader = req.headers.get('authorization') || '';
+      const cronSecret =
+        Deno.env.get('CRON_SECRET') ||
+        '73413d5806fa4253b87a505def85c94b1f412a6927494e6cb2799c056dd0ccbc';
+      if (authHeader !== `Bearer ${cronSecret}`) {
+        return jsonResponse({ error: 'Unauthorized cron invocation' }, 401);
+      }
+
       // Find unfired alarms
       const { data: alarms, error } = await supabase
         .from('pwa_bus_alarms')

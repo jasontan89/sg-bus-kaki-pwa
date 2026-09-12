@@ -3,19 +3,17 @@ import { searchOfflineBusStops } from './offlineStorage';
 import { calculateHaversineDistanceMeters } from './alarmManager';
 import { SEED_BUS_STOPS } from './busStopsData';
 
-const BASE_API_URL =
-  import.meta.env.VITE_PWA_API_URL ||
-  'https://blcsjvifiytbznwesmyx.supabase.co/functions/v1/pwa_api';
+const BASE_API_URL = import.meta.env.VITE_PWA_API_URL || '';
+const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-const ANON_KEY =
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsY3NqdmlmaXl0Ynpud2VzbXl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MTkzNDcsImV4cCI6MjA5ODM5NTM0N30.PhO08MviDmKyRn941IngM9-WaG_j7lwiCL5IqzG5qt0';
-
-const defaultHeaders = {
+const defaultHeaders: Record<string, string> = {
   'Content-Type': 'application/json',
-  apikey: ANON_KEY,
-  Authorization: `Bearer ${ANON_KEY}`,
 };
+
+if (ANON_KEY) {
+  defaultHeaders['apikey'] = ANON_KEY;
+  defaultHeaders['Authorization'] = `Bearer ${ANON_KEY}`;
+}
 
 /**
  * Fetch live bus arrivals for a bus stop
@@ -158,7 +156,7 @@ export async function fetchVapidPublicKey(): Promise<string> {
   }
   return (
     import.meta.env.VITE_VAPID_PUBLIC_KEY ||
-    'BOf8CICk12spIImcvztWy2XrTNW2iOsrbCNLYl4zbT4wGI9NEPsAvYzRNInigEMg9E-6vP4fJBAsec3kDLIw70U'
+    'BHSw8VkpCSgUdC1_XRhHMvLMdm7w-VhRH_tahYM2ZXOBAhQ2A80SPwEvakojni6fs7gT3R_ke7ZKspb6w79rBw8'
   );
 }
 
@@ -179,25 +177,25 @@ export async function registerPushSubscription(payload: {
     });
     return res.ok;
   } catch (err) {
-    console.error('Failed to save push subscription:', err);
+    console.error('Error saving push subscription:', err);
     return false;
   }
 }
 
 /**
- * Arm dynamic bus arrival countdown push alert
+ * Schedule bus arrival alarm in Supabase
  */
-export async function createBusArrivalAlarm(alarm: {
+export async function createBusArrivalAlarm(payload: {
   endpoint: string;
   busStopCode: string;
   busStopName: string;
   serviceNo: string;
-  leadMins: number;
-}): Promise<any> {
+  leadMins?: number;
+}): Promise<{ ok: boolean; alarmId?: number }> {
   const res = await fetch(`${BASE_API_URL}/api/bus-alarm`, {
     method: 'POST',
     headers: defaultHeaders,
-    body: JSON.stringify(alarm),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error('Failed to schedule arrival alarm');
   return await res.json();
@@ -206,14 +204,36 @@ export async function createBusArrivalAlarm(alarm: {
 /**
  * Delete or cancel active bus arrival alarm
  */
-export async function deleteBusArrivalAlarm(alarmId: number | string): Promise<boolean> {
+export async function deleteBusArrivalAlarm(
+  alarmId: number | string,
+  endpoint?: string
+): Promise<boolean> {
   try {
-    const res = await fetch(`${BASE_API_URL}/api/bus-alarm/${alarmId}`, {
+    const url = endpoint
+      ? `${BASE_API_URL}/api/bus-alarm/${alarmId}?endpoint=${encodeURIComponent(endpoint)}`
+      : `${BASE_API_URL}/api/bus-alarm/${alarmId}`;
+    const res = await fetch(url, {
       method: 'DELETE',
       headers: defaultHeaders,
     });
     return res.ok;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Dispatches a real test push notification from backend server down to phone
+ */
+export async function sendTestPushNotification(endpoint?: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${BASE_API_URL}/api/test-push`, {
+      method: 'POST',
+      headers: defaultHeaders,
+      body: JSON.stringify({ endpoint }),
+    });
+    return await res.json();
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Network error reaching push server' };
   }
 }

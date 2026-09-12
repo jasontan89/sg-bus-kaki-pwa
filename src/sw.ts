@@ -73,7 +73,17 @@ self.addEventListener('notificationclick', (event) => {
     return;
   }
 
-  const targetUrl = (event.notification.data && event.notification.data.url) || '/';
+  let targetUrl = (event.notification.data && event.notification.data.url) || '/';
+
+  // Prevent Open Redirect / Phishing: Ensure targetUrl is strictly a safe relative path
+  if (
+    typeof targetUrl !== 'string' ||
+    !targetUrl.startsWith('/') ||
+    targetUrl.startsWith('//') ||
+    targetUrl.includes('://')
+  ) {
+    targetUrl = '/';
+  }
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {

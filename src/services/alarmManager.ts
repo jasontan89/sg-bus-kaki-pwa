@@ -110,6 +110,7 @@ export function playGentleTransitChime() {
  */
 export function startContinuousChime() {
   stopContinuousChime();
+  stopBackgroundAudioKeepAlive();
   playGentleTransitChime();
   chimeIntervalId = setInterval(() => {
     playGentleTransitChime();
@@ -123,6 +124,70 @@ export function stopContinuousChime() {
   if (chimeIntervalId) {
     clearInterval(chimeIntervalId);
     chimeIntervalId = null;
+  }
+}
+
+/**
+ * Background Audio Keep-Alive Service:
+ * On Android Chrome and iOS Safari, the browser aggressively freezes JS execution and shuts down
+ * `navigator.geolocation.watchPosition` within seconds after the screen locks or user switches apps.
+ * Playing an active HTML5 audio stream with MediaSession metadata registers the app as an active
+ * foreground media service with the OS power manager, keeping the JS thread & GPS tracking alive.
+ */
+let backgroundAudio: HTMLAudioElement | null = null;
+
+export function startBackgroundAudioKeepAlive(stopName: string) {
+  try {
+    if (!backgroundAudio) {
+      backgroundAudio = new Audio('/silence.wav');
+      backgroundAudio.loop = true;
+      backgroundAudio.volume = 0.01;
+    }
+
+    backgroundAudio.play().catch((err) => {
+      console.warn('Background audio autoplay notice:', err);
+    });
+
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: `Alighting Alert Active 🚌`,
+        artist: `Destination: ${stopName}`,
+        album: 'SG Bus Kaki Real-Time GPS Shield',
+        artwork: [
+          { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+        ],
+      });
+
+      navigator.mediaSession.setActionHandler('play', () => {
+        backgroundAudio?.play().catch(() => {});
+      });
+      navigator.mediaSession.setActionHandler('pause', () => {
+        // Allow user to pause from lock screen if desired
+      });
+    }
+  } catch (err) {
+    console.warn('Could not initialize background audio keep-alive:', err);
+  }
+}
+
+export function stopBackgroundAudioKeepAlive() {
+  if (backgroundAudio) {
+    try {
+      backgroundAudio.pause();
+      backgroundAudio.src = '';
+    } catch {
+      // Safe fail
+    }
+    backgroundAudio = null;
+  }
+
+  if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+    try {
+      navigator.mediaSession.metadata = null;
+    } catch {
+      // Safe fail
+    }
   }
 }
 
