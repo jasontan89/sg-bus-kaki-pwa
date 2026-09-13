@@ -16,12 +16,12 @@ import {
   startBackgroundAudioKeepAlive,
   stopBackgroundAudioKeepAlive,
   unlockAudio,
-  requestScreenWakeLock,
   releaseScreenWakeLock,
 } from './services/alarmManager';
 import { dispatchNativeNotification } from './services/pushManager';
 import { seedBusStops, getCachedStopsCount, getFavorites } from './services/offlineStorage';
 import { SEED_BUS_STOPS } from './services/busStopsData';
+import { getStoredBusAlarms } from './services/alarmStorage';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('nearby');
@@ -29,6 +29,7 @@ export const App: React.FC = () => {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [favoritesCount, setFavoritesCount] = useState<number>(0);
   const [searchInitialService, setSearchInitialService] = useState<string>('');
+  const [busAlarmsCount, setBusAlarmsCount] = useState<number>(() => getStoredBusAlarms().length);
 
   // GPS Location state
   const [userLat, setUserLat] = useState<number | null>(null);
@@ -37,7 +38,7 @@ export const App: React.FC = () => {
   // Toasts state
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  // Alighting Wake-Up Alarm State
+  // Alighting Wake-Up Alarm State (Screen Awake OFF by default as per user design)
   const [alightAlarm, setAlightAlarm] = useState<AlightingAlarmState>({
     armed: false,
     stopCode: '',
@@ -48,10 +49,16 @@ export const App: React.FC = () => {
     thresholdMeters: 500,
     currentDistanceMeters: null,
     isTriggered: false,
-    keepScreenAwake: true,
+    keepScreenAwake: false,
   });
 
   const geoWatchId = useRef<number | null>(null);
+
+  useEffect(() => {
+    const updateCount = () => setBusAlarmsCount(getStoredBusAlarms().length);
+    window.addEventListener('sg_bus_alarms_updated', updateCount);
+    return () => window.removeEventListener('sg_bus_alarms_updated', updateCount);
+  }, []);
 
   // Toast Helper
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -235,11 +242,11 @@ export const App: React.FC = () => {
       thresholdMeters: 500,
       currentDistanceMeters: initialDist,
       isTriggered,
-      keepScreenAwake: true,
+      keepScreenAwake: false,
     };
 
     setAlightAlarm(newState);
-    requestScreenWakeLock().catch(() => {});
+    // Screen awake is OFF by default as per user design; wake lock only requested if user toggles ON in HUD
     startBackgroundAudioKeepAlive(stop.description);
     setActiveTab('hud');
     showToast(`Alight alarm armed for ${stop.description}!`, 'success');
@@ -266,7 +273,7 @@ export const App: React.FC = () => {
       armed: false,
       isTriggered: false,
     }));
-    setActiveTab('nearby');
+    setActiveTab((current) => (current === 'hud' ? 'nearby' : current));
     showToast('Ride ended. Welcome to your destination! 🚌', 'success');
   };
 
@@ -327,7 +334,14 @@ export const App: React.FC = () => {
 
         {activeTab === 'mrt' && <MrtMapView />}
 
-        {activeTab === 'alerts' && <AlertsView onShowToast={showToast} />}
+        {activeTab === 'alerts' && (
+          <AlertsView
+            onShowToast={showToast}
+            alightAlarm={alightAlarm}
+            onStopAlightAlarm={handleStopAlarm}
+            onOpenHUD={() => setActiveTab('hud')}
+          />
+        )}
       </main>
 
       {/* Fullscreen Active Ride HUD (Rendered when in 'hud' tab) */}
@@ -357,6 +371,7 @@ export const App: React.FC = () => {
         }}
         alightAlarm={alightAlarm}
         favoritesCount={favoritesCount}
+        alertsCount={(alightAlarm.armed ? 1 : 0) + busAlarmsCount}
       />
 
       {/* Toast Notification Container */}

@@ -214,6 +214,13 @@ export const ActiveRideHUD: React.FC<ActiveRideHUDProps> = ({
           </button>
         </div>
 
+        {/* Screen Awake Mode Explanation */}
+        <p className="text-[10px] text-slate-400 text-center px-2 py-0.5 leading-tight">
+          {keepScreenAwake
+            ? '⚡ Awake ON: Keeps display lit continuously. (Uses more battery)'
+            : '🔋 Awake OFF (Default): Display sleeps normally to save battery. Background audio alarm is fully active.'}
+        </p>
+
         {/* Primary Stop Alarm / Alighted Button */}
         <button
           onClick={onStopAlarm}

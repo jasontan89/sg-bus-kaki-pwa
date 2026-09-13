@@ -4,7 +4,9 @@ import { getFavorites, removeFavorite, saveFavorite } from '../services/offlineS
 import { fetchBusArrivals } from '../services/api';
 import { BusArrivalCard } from '../components/BusArrivalCard';
 import { SetArrivalAlarmModal } from '../components/SetArrivalAlarmModal';
-import { Star, RefreshCw, Trash2, Edit2, Check, ChevronDown, ChevronUp, Bell } from 'lucide-react';
+import { BusFilterModal } from '../components/BusFilterModal';
+import { StreetViewButton } from '../components/StreetViewButton';
+import { Star, RefreshCw, Trash2, Edit2, Check, ChevronDown, ChevronUp, Bell, Filter } from 'lucide-react';
 
 interface FavoritesViewProps {
   onArmAlightAlarm: (stop: BusStop) => void;
@@ -26,13 +28,45 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
   const [refreshingAll, setRefreshingAll] = useState(false);
   const [editingCode, setEditingCode] = useState<string | null>(null);
   const [tempName, setTempName] = useState('');
-
   const [alarmModalData, setAlarmModalData] = useState<{
     isOpen: boolean;
     stopCode: string;
     stopName: string;
     serviceNo: string;
   }>({ isOpen: false, stopCode: '', stopName: '', serviceNo: '' });
+
+  const [filterModalData, setFilterModalData] = useState<{
+    isOpen: boolean;
+    fav: FavoriteStop | null;
+    availableServices: string[];
+    hiddenServices: string[];
+  }>({ isOpen: false, fav: null, availableServices: [], hiddenServices: [] });
+
+  const handleOpenFilter = (fav: FavoriteStop) => {
+    const arrivals = arrivalsMap[fav.bus_stop_code];
+    const availableServices = (arrivals?.services || []).map((s) => s.serviceNo);
+    setFilterModalData({
+      isOpen: true,
+      fav,
+      availableServices,
+      hiddenServices: fav.hidden_services || [],
+    });
+  };
+
+  const handleUpdateHiddenServices = async (newHidden: string[]) => {
+    if (!filterModalData.fav) return;
+    const updatedFav: FavoriteStop = {
+      ...filterModalData.fav,
+      hidden_services: newHidden,
+    };
+    await saveFavorite(updatedFav);
+    setFilterModalData((prev) => ({ ...prev, fav: updatedFav, hiddenServices: newHidden }));
+    setFavorites((prev) =>
+      prev.map((f) => (f.bus_stop_code === updatedFav.bus_stop_code ? updatedFav : f))
+    );
+    if (onFavoritesChanged) onFavoritesChanged();
+    onShowToast(`Saved bus filters for ${updatedFav.description}`, 'info');
+  };
 
   const loadFavs = async () => {
     const list = await getFavorites();
@@ -188,6 +222,32 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                     className="flex items-center space-x-1"
                     onClick={(e) => e.stopPropagation()}
                   >
+                    {/* Street View */}
+                    <StreetViewButton
+                      latitude={fav.latitude}
+                      longitude={fav.longitude}
+                      stopName={fav.description}
+                      variant="icon"
+                      className="p-1.5"
+                    />
+
+                    {/* Service Filter */}
+                    <button
+                      onClick={() => handleOpenFilter(fav)}
+                      className={`p-1.5 rounded-lg border transition-all relative ${
+                        (fav.hidden_services || []).length > 0
+                          ? 'bg-brand-sky/20 border-brand-sky text-brand-sky'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800 border-slate-800'
+                      }`}
+                      title="Filter bus services at this stop"
+                    >
+                      <Filter className="w-3.5 h-3.5" />
+                      {(fav.hidden_services || []).length > 0 && (
+                        <span className="absolute -top-1 -right-1 w-2 h-2 bg-brand-sky rounded-full" />
+                      )}
+                    </button>
+
+                    {/* Alight Alert */}
                     <button
                       onClick={() => {
                         onArmAlightAlarm({
@@ -204,23 +264,29 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                       <Bell className="w-3.5 h-3.5" />
                       <span>Alight</span>
                     </button>
+
+                    {/* Edit Nickname */}
                     <button
                       onClick={() => {
                         setEditingCode(fav.bus_stop_code);
                         setTempName(fav.custom_name || fav.description);
                       }}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800"
                       title="Edit stop nickname"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
+
+                    {/* Remove */}
                     <button
                       onClick={() => handleRemove(fav.bus_stop_code)}
-                      className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800"
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 border border-slate-800"
                       title="Remove from favorites"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
+
+                    {/* Expand/Collapse */}
                     <button
                       onClick={() => {
                         const next = isExpanded ? null : fav.bus_stop_code;
@@ -237,6 +303,29 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                 {/* Expanded Arrivals View */}
                 {isExpanded && (
                   <div className="px-3 pb-3 pt-1 border-t border-slate-800/80 space-y-2">
+                    {/* Active Filter indicator */}
+                    {(fav.hidden_services || []).length > 0 && (
+                      <div className="flex items-center justify-between bg-brand-sky/10 border border-brand-sky/30 px-2.5 py-1 rounded-lg text-[10px] text-brand-sky">
+                        <span>Showing {visibleServices.length} of {arrivals?.services?.length || 0} buses</span>
+                        <button
+                          onClick={() => handleUpdateHiddenServices([])}
+                          className="font-bold underline hover:text-white"
+                        >
+                          Show All
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Seat Availability Legend */}
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 px-0.5 pt-0.5">
+                      <span className="font-semibold text-slate-500 uppercase tracking-wider text-[9px]">Live Arrivals</span>
+                      <div className="flex items-center space-x-2 text-[10px]">
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />Seats</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />Standing</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />Limited</span>
+                      </div>
+                    </div>
+
                     {isLoading ? (
                       <div className="py-4 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
                         <RefreshCw className="w-4 h-4 animate-spin text-brand-sky" />
@@ -285,6 +374,26 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
         onSuccess={(msg) => onShowToast(msg, 'success')}
         onError={(err) => onShowToast(err, 'error')}
       />
+
+      {/* Bus Service Filter Modal for Favorites */}
+      {filterModalData.isOpen && filterModalData.fav && (
+        <BusFilterModal
+          isOpen={filterModalData.isOpen}
+          busStopCode={filterModalData.fav.bus_stop_code}
+          busStopName={filterModalData.fav.custom_name || filterModalData.fav.description}
+          availableServices={filterModalData.availableServices}
+          hiddenServices={filterModalData.hiddenServices}
+          onToggleService={(svc) => {
+            const next = filterModalData.hiddenServices.includes(svc)
+              ? filterModalData.hiddenServices.filter((s) => s !== svc)
+              : [...filterModalData.hiddenServices, svc];
+            handleUpdateHiddenServices(next);
+          }}
+          onSelectAll={() => handleUpdateHiddenServices([])}
+          onClearAll={() => handleUpdateHiddenServices(filterModalData.availableServices)}
+          onClose={() => setFilterModalData((prev) => ({ ...prev, isOpen: false }))}
+        />
+      )}
     </div>
   );
 };

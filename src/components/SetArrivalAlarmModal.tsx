@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Bell, X, Check, Smartphone, AlertCircle } from 'lucide-react';
 import { subscribeToPush, serializeSubscription, getNotificationPermission } from '../services/pushManager';
 import { createBusArrivalAlarm, registerPushSubscription, fetchVapidPublicKey } from '../services/api';
+import { saveStoredBusAlarm } from '../services/alarmStorage';
 
 interface SetArrivalAlarmModalProps {
   isOpen: boolean;
@@ -44,12 +45,23 @@ export const SetArrivalAlarmModal: React.FC<SetArrivalAlarmModalProps> = ({
       await registerPushSubscription(serialized);
 
       // 4. Arm alarm in backend
-      await createBusArrivalAlarm({
+      const res = await createBusArrivalAlarm({
         endpoint: subscription.endpoint,
         busStopCode,
         busStopName,
         serviceNo,
         leadMins,
+      });
+
+      // Save locally to display in Active Alerts list
+      saveStoredBusAlarm({
+        id: res?.alarmId || `${busStopCode}_${serviceNo}_${Date.now()}`,
+        endpoint: subscription.endpoint,
+        bus_stop_code: busStopCode,
+        bus_stop_name: busStopName,
+        service_no: serviceNo,
+        lead_mins: leadMins,
+        created_at: new Date().toISOString(),
       });
 
       onSuccess(`Alert set! You will be notified when Bus ${serviceNo} is ${leadMins} mins away.`);

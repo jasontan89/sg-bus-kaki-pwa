@@ -156,7 +156,10 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
           <div style="font-size: 11px; color: #94a3b8; margin-bottom: 4px;">
             ${stop.road_name} • <span style="color: #38bdf8; font-weight: 700;">${stop.bus_stop_code}</span>
           </div>
-          ${stop.distance ? `<div style="font-size: 10px; color: #38bdf8; font-weight: 600;">${Math.round(stop.distance)}m away</div>` : ''}
+          ${stop.distance ? `<div style="font-size: 10px; color: #38bdf8; font-weight: 600; margin-bottom: 4px;">${Math.round(stop.distance)}m away</div>` : ''}
+          <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${stop.latitude},${stop.longitude}" target="_blank" rel="noopener noreferrer" style="display: inline-block; color: #38bdf8; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 6px; padding: 3px 8px; font-size: 10px; font-weight: 700; text-decoration: none;">
+            👁️ 360° Street View
+          </a>
         </div>
       `);
 

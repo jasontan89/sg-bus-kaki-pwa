@@ -6,6 +6,7 @@ import { LeafletMap } from '../components/LeafletMap';
 import { BusArrivalCard } from '../components/BusArrivalCard';
 import { BusFilterModal } from '../components/BusFilterModal';
 import { SetArrivalAlarmModal } from '../components/SetArrivalAlarmModal';
+import { StreetViewButton } from '../components/StreetViewButton';
 import { Star, RefreshCw, MapPin, Filter, Bell } from 'lucide-react';
 
 interface NearbyViewProps {
@@ -66,6 +67,13 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
   const handleSelectStop = async (stop: BusStop) => {
     setSelectedStop(stop);
     setLoadingArrivals(true);
+    // Restore saved bus filter preferences for this stop code
+    try {
+      const saved = localStorage.getItem(`sg_filter_${stop.bus_stop_code}`);
+      setHiddenServices(saved ? JSON.parse(saved) : []);
+    } catch {
+      setHiddenServices([]);
+    }
     try {
       const [favStatus, arrivalData] = await Promise.all([
         isFavorite(stop.bus_stop_code),
@@ -208,13 +216,28 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
                 <span>Alight Alert</span>
               </button>
 
+              {/* Street View Button */}
+              <StreetViewButton
+                latitude={selectedStop.latitude}
+                longitude={selectedStop.longitude}
+                stopName={selectedStop.description}
+                variant="icon"
+              />
+
               {/* Service Filter */}
               <button
                 onClick={() => setFilterModalOpen(true)}
-                className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-brand-sky text-slate-300 active:scale-95 transition-all"
+                className={`p-2 rounded-xl border active:scale-95 transition-all relative ${
+                  hiddenServices.length > 0
+                    ? 'bg-brand-sky/20 border-brand-sky text-brand-sky'
+                    : 'bg-slate-900 border-slate-800 hover:border-brand-sky text-slate-300'
+                }`}
                 title="Filter bus services"
               >
                 <Filter className="w-4 h-4" />
+                {hiddenServices.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-brand-sky rounded-full" />
+                )}
               </button>
 
               {/* Toggle Favorite */}
@@ -242,8 +265,18 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
             </div>
           </div>
 
+          {/* Seat Availability Color Legend */}
+          <div className="flex items-center justify-between text-[10px] text-slate-400 px-1 pt-1 pb-0.5 border-t border-slate-800/80">
+            <span className="font-semibold text-slate-500 uppercase tracking-wider text-[9px]">Live Arrivals</span>
+            <div className="flex items-center space-x-2 text-[10px]">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />Seats</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />Standing</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />Limited</span>
+            </div>
+          </div>
+
           {/* Bus Arrivals List */}
-          <div className="space-y-2.5 pt-1">
+          <div className="space-y-2 pt-0.5">
             {loadingArrivals ? (
               <div className="py-8 text-center text-slate-400 text-xs flex flex-col items-center justify-center space-y-2">
                 <RefreshCw className="w-5 h-5 animate-spin text-brand-sky" />
@@ -284,12 +317,26 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
           availableServices={availableServices}
           hiddenServices={hiddenServices}
           onToggleService={(svc) => {
-            setHiddenServices((prev) =>
-              prev.includes(svc) ? prev.filter((s) => s !== svc) : [...prev, svc]
-            );
+            const next = hiddenServices.includes(svc)
+              ? hiddenServices.filter((s) => s !== svc)
+              : [...hiddenServices, svc];
+            setHiddenServices(next);
+            try {
+              localStorage.setItem(`sg_filter_${selectedStop.bus_stop_code}`, JSON.stringify(next));
+            } catch {}
           }}
-          onSelectAll={() => setHiddenServices([])}
-          onClearAll={() => setHiddenServices(availableServices)}
+          onSelectAll={() => {
+            setHiddenServices([]);
+            try {
+              localStorage.setItem(`sg_filter_${selectedStop.bus_stop_code}`, JSON.stringify([]));
+            } catch {}
+          }}
+          onClearAll={() => {
+            setHiddenServices(availableServices);
+            try {
+              localStorage.setItem(`sg_filter_${selectedStop.bus_stop_code}`, JSON.stringify(availableServices));
+            } catch {}
+          }}
           onClose={() => setFilterModalOpen(false)}
         />
       )}

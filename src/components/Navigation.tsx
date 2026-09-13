@@ -10,6 +10,7 @@ interface NavigationProps {
   onTabChange: (tab: TabType) => void;
   alightAlarm: AlightingAlarmState;
   favoritesCount: number;
+  alertsCount?: number;
 }
 
 export const Navigation: React.FC<NavigationProps> = ({
@@ -17,13 +18,14 @@ export const Navigation: React.FC<NavigationProps> = ({
   onTabChange,
   alightAlarm,
   favoritesCount,
+  alertsCount,
 }) => {
   const navItems: { id: TabType; label: string; icon: React.ReactNode; badge?: number }[] = [
     { id: 'nearby', label: 'Nearby', icon: <Compass className="w-5 h-5" /> },
     { id: 'favorites', label: 'Favorites', icon: <Star className="w-5 h-5" />, badge: favoritesCount },
     { id: 'search', label: 'Search', icon: <Search className="w-5 h-5" /> },
     { id: 'mrt', label: 'MRT Map', icon: <Train className="w-5 h-5" /> },
-    { id: 'alerts', label: 'Alerts', icon: <Bell className="w-5 h-5" /> },
+    { id: 'alerts', label: 'Alerts', icon: <Bell className="w-5 h-5" />, badge: alertsCount },
   ];
 
   return (

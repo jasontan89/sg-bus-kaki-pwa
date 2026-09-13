@@ -5,6 +5,7 @@ import { isFavorite, saveFavorite, removeFavorite } from '../services/offlineSto
 import { SEED_BUS_STOPS } from '../services/busStopsData';
 import { BusArrivalCard } from '../components/BusArrivalCard';
 import { SetArrivalAlarmModal } from '../components/SetArrivalAlarmModal';
+import { StreetViewButton } from '../components/StreetViewButton';
 import { Search, MapPin, Route as RouteIcon, Star, RefreshCw, X, ArrowUpDown, Bell } from 'lucide-react';
 
 interface SearchViewProps {
@@ -253,11 +254,20 @@ export const SearchView: React.FC<SearchViewProps> = ({
                 </div>
               </div>
 
-              {/* Operating Hours Pill */}
-              <div className="text-right shrink-0 text-[10px] font-mono text-slate-400">
-                <span>{rStop.wd_first_bus || '05:30'}</span>
-                <span className="mx-1 text-slate-600">-</span>
-                <span>{rStop.wd_last_bus || '23:30'}</span>
+              {/* Operating Hours & Street View */}
+              <div className="flex items-center space-x-2 shrink-0">
+                <StreetViewButton
+                  latitude={rStop.latitude || 0}
+                  longitude={rStop.longitude || 0}
+                  stopName={rStop.description || rStop.bus_stop_code}
+                  variant="icon"
+                  className="p-1 rounded-lg"
+                />
+                <div className="text-right text-[10px] font-mono text-slate-400">
+                  <span>{rStop.wd_first_bus || '05:30'}</span>
+                  <span className="mx-1 text-slate-600">-</span>
+                  <span>{rStop.wd_last_bus || '23:30'}</span>
+                </div>
               </div>
             </div>
           ))}
@@ -285,17 +295,26 @@ export const SearchView: React.FC<SearchViewProps> = ({
                 </p>
               </div>
 
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onArmAlightAlarm(stop);
-                }}
-                className="flex items-center space-x-1 px-2 py-1 rounded-lg bg-brand-sky/15 border border-brand-sky/30 text-brand-sky hover:bg-brand-sky/25 text-[11px] font-bold shrink-0 active:scale-95 transition-all"
-                title="Arm Alight Alert for this stop"
-              >
-                <Bell className="w-3.5 h-3.5" />
-                <span>Alight</span>
-              </button>
+              <div className="flex items-center space-x-1 shrink-0">
+                <StreetViewButton
+                  latitude={stop.latitude || 0}
+                  longitude={stop.longitude || 0}
+                  stopName={stop.description}
+                  variant="icon"
+                  className="p-1 rounded-lg"
+                />
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onArmAlightAlarm(stop);
+                  }}
+                  className="flex items-center space-x-1 px-2 py-1 rounded-lg bg-brand-sky/15 border border-brand-sky/30 text-brand-sky hover:bg-brand-sky/25 text-[11px] font-bold shrink-0 active:scale-95 transition-all"
+                  title="Arm Alight Alert for this stop"
+                >
+                  <Bell className="w-3.5 h-3.5" />
+                  <span>Alight</span>
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -327,6 +346,12 @@ export const SearchView: React.FC<SearchViewProps> = ({
               </div>
 
               <div className="flex items-center space-x-1.5">
+                <StreetViewButton
+                  latitude={selectedStop.latitude}
+                  longitude={selectedStop.longitude}
+                  stopName={selectedStop.description}
+                  variant="icon"
+                />
                 <button
                   onClick={() => {
                     onArmAlightAlarm(selectedStop);
@@ -358,8 +383,18 @@ export const SearchView: React.FC<SearchViewProps> = ({
               </div>
             </div>
 
+            {/* Seat Availability Color Legend */}
+            <div className="flex items-center justify-between text-[10px] text-slate-400 px-1 pt-1 pb-0.5 border-t border-slate-800/80">
+              <span className="font-semibold text-slate-500 uppercase tracking-wider text-[9px]">Live Arrivals</span>
+              <div className="flex items-center space-x-2 text-[10px]">
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />Seats</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />Standing</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />Limited</span>
+              </div>
+            </div>
+
             {/* Arrivals */}
-            <div className="space-y-2.5 pt-1">
+            <div className="space-y-2 pt-0.5">
               {loadingArrivals ? (
                 <div className="py-6 text-center text-xs text-slate-400 flex items-center justify-center space-x-2">
                   <RefreshCw className="w-4 h-4 animate-spin text-brand-sky" />
