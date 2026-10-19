@@ -32,7 +32,11 @@ import {
 } from './services/api';
 import { seedBusStops, getCachedStopsCount, getFavorites } from './services/offlineStorage';
 import { SEED_BUS_STOPS } from './services/busStopsData';
-import { getStoredBusAlarms, removeStoredBusAlarm } from './services/alarmStorage';
+import {
+  getStoredBusAlarms,
+  removeStoredBusAlarm,
+  syncAlarmsWithServiceWorker,
+} from './services/alarmStorage';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('nearby');
@@ -344,11 +348,13 @@ export const App: React.FC = () => {
   // Start GPS, visibility recovery, Service Worker push listener, and background heartbeat
   useEffect(() => {
     startGPS(false);
+    syncAlarmsWithServiceWorker();
 
     // Immediately recover real-time GPS and check alarms when user returns to PWA from background
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
         startGPS(true);
+        syncAlarmsWithServiceWorker();
         checkActiveBusAlarms();
       }
     };
@@ -357,10 +363,19 @@ export const App: React.FC = () => {
     window.addEventListener('focus', handleVisibilityOrFocus);
     window.addEventListener('pageshow', handleVisibilityOrFocus);
 
-    // Listen for PUSH_ALARM_TRIGGERED from Service Worker when a cloud push arrives in background
+    // Listen for PUSH_ALARM_TRIGGERED from Service Worker when a cloud push or SW monitor fires in background
     const handleSWMessage = (event: MessageEvent) => {
       if (event.data && event.data.type === 'PUSH_ALARM_TRIGGERED') {
+        const pushData = event.data.data || {};
+        if (pushData.alarmId) {
+          removeStoredBusAlarm(pushData.alarmId);
+        } else if (pushData.stopCode && pushData.serviceNo) {
+          removeStoredBusAlarm(`${pushData.stopCode}_${pushData.serviceNo}`);
+        }
         startContinuousChime(event.data.title || '🚌 Bus Kaki Alert', 14000);
+        if (event.data.body) {
+          showToast(`⏰ ${event.data.body}`, 'error');
+        }
         checkActiveBusAlarms();
       }
     };

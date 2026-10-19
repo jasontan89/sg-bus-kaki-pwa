@@ -85,7 +85,87 @@ self.addEventListener('push', (event) => {
   }
 });
 
-// Handle direct notification dispatch requests from backgrounded client window
+const SW_API_BASE = 'https://blcsjvifiytbznwesmyx.supabase.co/functions/v1/pwa_api';
+let swActiveAlarms: any[] = [];
+let swMonitorRunning = false;
+
+async function runSwAlarmMonitorLoop() {
+  if (swMonitorRunning) return;
+  swMonitorRunning = true;
+
+  try {
+    // Poll every 15s while active alarms remain
+    while (swActiveAlarms.length > 0) {
+      for (const alarm of [...swActiveAlarms]) {
+        try {
+          const res = await fetch(
+            `${SW_API_BASE}/bus-arrivals?stop=${encodeURIComponent(alarm.bus_stop_code)}`
+          );
+          if (res.ok) {
+            const data = await res.json();
+            const svc = (data.services || []).find(
+              (s: any) =>
+                String(s.serviceNo).toLowerCase() === String(alarm.service_no).toLowerCase()
+            );
+            const etaMins = svc?.nextBus?.etaMinutes;
+
+            if (etaMins !== null && etaMins !== undefined && etaMins <= alarm.lead_mins) {
+              // Remove from SW active list so it only fires once
+              swActiveAlarms = swActiveAlarms.filter((a) => a.id !== alarm.id);
+
+              const title = `🚌 Bus ${alarm.service_no} Arriving!`;
+              const body = `Bus ${alarm.service_no} is arriving ${
+                etaMins <= 0 ? 'now' : `in ${etaMins} mins`
+              } at ${alarm.bus_stop_name || alarm.bus_stop_code}!`;
+              const tag = `bus-alarm-${alarm.id || `${alarm.bus_stop_code}_${alarm.service_no}`}`;
+              const alarmData = {
+                alarmId: alarm.id,
+                stopCode: alarm.bus_stop_code,
+                serviceNo: alarm.service_no,
+                url: `/?stop=${alarm.bus_stop_code}`,
+              };
+
+              await self.registration.showNotification(title, {
+                body,
+                icon: '/icon-192.png',
+                badge: '/icon-192.png',
+                tag,
+                renotify: true,
+                silent: false,
+                requireInteraction: true,
+                vibrate: [500, 250, 500, 250, 1000],
+                data: alarmData,
+              } as any);
+
+              const clientList = await self.clients.matchAll({
+                type: 'window',
+                includeUncontrolled: true,
+              });
+              for (const client of clientList) {
+                client.postMessage({
+                  type: 'PUSH_ALARM_TRIGGERED',
+                  title,
+                  body,
+                  tag,
+                  data: alarmData,
+                });
+              }
+            }
+          }
+        } catch {
+          // Ignore transient fetch errors
+        }
+      }
+
+      if (swActiveAlarms.length === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 15000));
+    }
+  } finally {
+    swMonitorRunning = false;
+  }
+}
+
+// Handle direct notification dispatch and background alarm sync from client window
 self.addEventListener('message', (event) => {
   if (!event.data) return;
 
@@ -103,6 +183,11 @@ self.addEventListener('message', (event) => {
           ...options,
         } as any)
       );
+    }
+  } else if (event.data.type === 'SYNC_BUS_ALARMS') {
+    swActiveAlarms = Array.isArray(event.data.alarms) ? event.data.alarms : [];
+    if (swActiveAlarms.length > 0 && !swMonitorRunning) {
+      event.waitUntil(runSwAlarmMonitorLoop());
     }
   }
 });

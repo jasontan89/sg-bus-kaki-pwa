@@ -23,21 +23,26 @@ let currentKeepAliveLabel = 'Active Transit Alert';
 let bgWorker: Worker | null = null;
 let bgTickCallbacks: Set<() => void> = new Set();
 let lastTickTime = 0;
+let autoResumeTimers: any[] = [];
+let keepAliveOsc: OscillatorNode | null = null;
+let keepAliveGain: GainNode | null = null;
 
 /**
- * Generates an in-memory 20-second 16-bit PCM WAV Blob URL with an imperceptible
- * sub-audible signal (-80 dBFS at 20Hz).
+ * Generates an in-memory 10-minute (600s) 16-bit PCM WAV Blob URL with an imperceptible
+ * passband micro-signal (190Hz + 285Hz at +/- 22 LSB, ~ -63 dBFS).
  * Why:
- * 1. Chromium on Android requires <audio> duration >= 5 seconds (kMinimumDurationForContent)
- *    to grant an Android OS Foreground Media Service & MediaSession lock.
- * 2. Chromium's SilentAudioDetector drops the audio wake lock if PCM samples are pure 0.
- *    Using +/- 3 LSB out of 32767 is 100% inaudible at volume=1.0 while keeping the CPU & audio pipeline awake.
+ * 1. A short 20s track hits EOF 9 times every 3 minutes; background loop seeks stall when Android
+ *    throttles the renderer process. A 10-minute track with pre-EOF wrap-around NEVER hits EOF.
+ * 2. Android AudioFlinger applies a ~30Hz high-pass filter that zeroes out 20Hz sub-bass completely,
+ *    causing Android 13+ / Xiaomi HyperOS / MIUI AudioService to auto-pause the MediaSession after ~3 minutes
+ *    of post-mixer digital zeros. Using 190Hz + 285Hz sits safely inside AudioFlinger's passband while
+ *    remaining completely imperceptible in normal phone usage.
  */
 function getKeepAliveWavUrl(): string {
   if (keepAliveWavUrl) return keepAliveWavUrl;
 
-  const sampleRate = 8000;
-  const durationSeconds = 20;
+  const sampleRate = 4000;
+  const durationSeconds = 600; // 10 minutes (00:00 -> 10:00)
   const numSamples = sampleRate * durationSeconds;
   const dataSize = numSamples * 2;
   const buffer = new ArrayBuffer(44 + dataSize);
@@ -63,9 +68,19 @@ function getKeepAliveWavUrl(): string {
   writeString(36, 'data');
   view.setUint32(40, dataSize, true);
 
-  for (let i = 0; i < numSamples; i++) {
-    const sample = Math.round(Math.sin((2 * Math.PI * 20 * i) / sampleRate) * 3);
-    view.setInt16(44 + i * 2, sample, true);
+  // Precompute 1-second period (4000 samples) and tile across 600 seconds for instant (<3ms) generation
+  const oneSecSamples = new Int16Array(sampleRate);
+  for (let i = 0; i < sampleRate; i++) {
+    const t = i / sampleRate;
+    const wave =
+      Math.sin(2 * Math.PI * 190 * t) * 15 +
+      Math.sin(2 * Math.PI * 285 * t) * 7;
+    oneSecSamples[i] = Math.round(wave);
+  }
+
+  const pcmView = new Int16Array(buffer, 44, numSamples);
+  for (let sec = 0; sec < durationSeconds; sec++) {
+    pcmView.set(oneSecSamples, sec * sampleRate);
   }
 
   const blob = new Blob([buffer], { type: 'audio/wav' });
@@ -161,7 +176,89 @@ function getAlarmChimeWavUrl(): string {
   return alarmChimeWavUrl;
 }
 
+function clearAutoResumeTimers() {
+  for (const t of autoResumeTimers) {
+    clearTimeout(t);
+  }
+  autoResumeTimers = [];
+}
+
+function forceResumeBackgroundAudio() {
+  if (!isKeepAliveActive && !isChimeRinging) return;
+  if (!backgroundAudio) return;
+
+  const tryPlay = () => {
+    if ((!isKeepAliveActive && !isChimeRinging) || !backgroundAudio) return;
+    if (backgroundAudio.paused) {
+      backgroundAudio.play().catch(() => {});
+    }
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'playing';
+      } catch {
+        // Safe fail
+      }
+    }
+  };
+
+  tryPlay();
+  clearAutoResumeTimers();
+  // Staggered retries to reclaim Android AudioFocus after transient notifications/interruptions
+  for (const delay of [80, 350, 1000, 2500, 5000]) {
+    autoResumeTimers.push(setTimeout(tryPlay, delay));
+  }
+}
+
+function startWebAudioKeepAlive() {
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    if (!keepAliveOsc) {
+      keepAliveOsc = ctx.createOscillator();
+      keepAliveGain = ctx.createGain();
+      keepAliveOsc.type = 'sine';
+      keepAliveOsc.frequency.setValueAtTime(190, ctx.currentTime);
+      keepAliveGain.gain.setValueAtTime(0.0003, ctx.currentTime);
+      keepAliveOsc.connect(keepAliveGain);
+      keepAliveGain.connect(ctx.destination);
+      keepAliveOsc.start();
+    }
+  } catch {
+    // Safe fail
+  }
+}
+
+function stopWebAudioKeepAlive() {
+  if (keepAliveOsc) {
+    try {
+      keepAliveOsc.stop();
+      keepAliveOsc.disconnect();
+    } catch {
+      // Safe fail
+    }
+    keepAliveOsc = null;
+  }
+  if (keepAliveGain) {
+    try {
+      keepAliveGain.disconnect();
+    } catch {
+      // Safe fail
+    }
+    keepAliveGain = null;
+  }
+}
+
 function emitBackgroundTick() {
+  // Watchdog: if Android or another app paused our background audio while an alert is active, resume immediately
+  if ((isKeepAliveActive || isChimeRinging) && backgroundAudio && backgroundAudio.paused) {
+    forceResumeBackgroundAudio();
+  }
+  if ((isKeepAliveActive || isChimeRinging) && audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+
   const now = Date.now();
   if (now - lastTickTime < 2000) return;
   lastTickTime = now;
@@ -180,7 +277,7 @@ function ensureBackgroundWorker() {
     const workerCode = `
       let timer = setInterval(() => {
         self.postMessage('tick');
-      }, 3500);
+      }, 2500);
       self.onmessage = (e) => {
         if (e.data === 'stop') {
           clearInterval(timer);
@@ -234,8 +331,54 @@ function ensureBackgroundAudioElement(): HTMLAudioElement {
     backgroundAudio.preload = 'auto';
     backgroundAudio.loop = true;
     backgroundAudio.volume = 1.0;
+
     backgroundAudio.addEventListener('timeupdate', () => {
+      // Seamless pre-EOF wrap-around so the 10-minute keep-alive track NEVER hits EOF or stalls on loop seek
+      if (
+        backgroundAudio &&
+        !isChimeRinging &&
+        backgroundAudio.duration > 60 &&
+        backgroundAudio.currentTime > backgroundAudio.duration - 15
+      ) {
+        try {
+          backgroundAudio.currentTime = 1.0;
+        } catch {
+          // Safe fail
+        }
+      }
       emitBackgroundTick();
+    });
+
+    // Auto-resume immediately if Android OS, MIUI battery saver, or transient notification pauses the stream
+    backgroundAudio.addEventListener('pause', () => {
+      if (isKeepAliveActive || isChimeRinging) {
+        forceResumeBackgroundAudio();
+      }
+    });
+
+    backgroundAudio.addEventListener('ended', () => {
+      if (isKeepAliveActive || isChimeRinging) {
+        if (backgroundAudio) {
+          try {
+            backgroundAudio.currentTime = 0;
+          } catch {
+            // Safe fail
+          }
+        }
+        forceResumeBackgroundAudio();
+      }
+    });
+
+    backgroundAudio.addEventListener('stalled', () => {
+      if (isKeepAliveActive || isChimeRinging) {
+        forceResumeBackgroundAudio();
+      }
+    });
+
+    backgroundAudio.addEventListener('waiting', () => {
+      if (isKeepAliveActive || isChimeRinging) {
+        forceResumeBackgroundAudio();
+      }
     });
   }
   return backgroundAudio;
@@ -446,14 +589,14 @@ function updateKeepAliveMediaSession(label: string) {
       navigator.mediaSession.playbackState = 'playing';
 
       navigator.mediaSession.setActionHandler('play', () => {
-        backgroundAudio?.play().catch(() => {});
+        forceResumeBackgroundAudio();
       });
       navigator.mediaSession.setActionHandler('pause', () => {
         if (isChimeRinging) {
           stopContinuousChime();
         } else {
           // Keep background protection running unless user explicitly cancels alarm in app
-          backgroundAudio?.play().catch(() => {});
+          forceResumeBackgroundAudio();
         }
       });
     } catch {
@@ -464,15 +607,16 @@ function updateKeepAliveMediaSession(label: string) {
 
 /**
  * Background Audio Keep-Alive Service:
- * Plays a 20-second sub-audible (-80 dBFS) WAV stream with MediaSession metadata and starts a
- * dedicated Web Worker timer so Android Chrome keeps the JS thread, network polling, and audio
- * session alive when the user navigates out of the PWA or locks their screen.
+ * Plays a 10-minute passband micro-signal WAV stream with MediaSession metadata, a Web Audio
+ * keep-alive oscillator, and a dedicated Web Worker timer so Android Chrome keeps the JS thread,
+ * network polling, and audio session alive without pausing after a few minutes.
  */
 export function startBackgroundAudioKeepAlive(stopName: string) {
   try {
     isKeepAliveActive = true;
     currentKeepAliveLabel = stopName || 'Active Transit Alert';
     ensureBackgroundWorker();
+    startWebAudioKeepAlive();
 
     const audio = ensureBackgroundAudioElement();
     if (!isChimeRinging) {
@@ -486,6 +630,7 @@ export function startBackgroundAudioKeepAlive(stopName: string) {
         console.warn('Background audio autoplay notice:', err);
       });
       updateKeepAliveMediaSession(currentKeepAliveLabel);
+      forceResumeBackgroundAudio();
     }
   } catch (err) {
     console.warn('Could not initialize background audio keep-alive:', err);
@@ -494,7 +639,9 @@ export function startBackgroundAudioKeepAlive(stopName: string) {
 
 export function stopBackgroundAudioKeepAlive() {
   isKeepAliveActive = false;
+  clearAutoResumeTimers();
   stopBackgroundWorker();
+  stopWebAudioKeepAlive();
 
   if (backgroundAudio && !isChimeRinging) {
     try {
