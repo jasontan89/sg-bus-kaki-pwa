@@ -11,7 +11,7 @@ export default defineConfig({
       filename: 'sw.ts',
       registerType: 'autoUpdate',
       injectRegister: 'auto',
-      includeAssets: ['favicon.svg', 'bus-mascot.svg', 'mrt_map.svg', 'icon-192.png', 'icon-512.png'],
+      includeAssets: ['favicon.svg', 'bus-mascot.svg', 'mrt_map.svg', 'icon-192.png', 'icon-512.png', 'silence.wav'],
       manifest: {
         name: 'SG Bus Kaki - Singapore Transit',
         short_name: 'Bus Kaki',

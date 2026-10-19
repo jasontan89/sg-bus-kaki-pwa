@@ -27,7 +27,13 @@ import {
   sendTestPushNotification,
   deleteBusArrivalAlarm,
 } from '../services/api';
-import { playGentleTransitChime, unlockAudio, formatDistance } from '../services/alarmManager';
+import {
+  playGentleTransitChime,
+  unlockAudio,
+  formatDistance,
+  stopContinuousChime,
+  startBackgroundAudioKeepAlive,
+} from '../services/alarmManager';
 import { getStoredBusAlarms, removeStoredBusAlarm } from '../services/alarmStorage';
 import { AlightingAlarmState, BusArrivalAlarm } from '../types/transit';
 
@@ -71,6 +77,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
   }, []);
 
   const handleCancelBusAlarm = async (alarm: BusArrivalAlarm) => {
+    stopContinuousChime();
     try {
       if (alarm.id) {
         await deleteBusArrivalAlarm(alarm.id, alarm.endpoint);
@@ -99,6 +106,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
   }, []);
 
   const handleEnablePush = async () => {
+    unlockAudio();
     setLoading(true);
     try {
       const perm = await requestNotificationPermission();
@@ -162,9 +170,9 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     unlockAudio();
     playGentleTransitChime();
     const sent = await dispatchNativeNotification('🚌 Bus Kaki Alert', {
-      body: 'Bus 65 is arriving in 2 minutes at Hotel Grand Pacific!',
-      icon: '/bus-mascot.svg',
-      badge: '/bus-mascot.svg',
+      body: 'Bus 65 is arriving in 2 minutes!',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
       vibrate: [500, 250, 500, 250, 1000],
     });
     if (sent) {
@@ -175,6 +183,8 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
   };
 
   const handleTestServerPush = async () => {
+    unlockAudio();
+    startBackgroundAudioKeepAlive('Cloud Push Test');
     setTestingCloudPush(true);
     try {
       // 1. Check permission
@@ -201,11 +211,13 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         alert_filter: alertFilter,
       });
 
-      // 4. Send test push from Supabase server
-      onShowToast('Dispatching test alert from cloud... Lock your screen now!', 'info');
+      // 4. Give user 4 seconds to background the PWA or lock their screen, then dispatch from Supabase!
+      onShowToast('Switch out of PWA or lock your screen now! Cloud alert arriving in 4s...', 'info');
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+
       const res = await sendTestPushNotification(sub.endpoint);
       if (res.ok) {
-        onShowToast('Cloud Web Push delivered! Check your phone lock screen. 🔔✨', 'success');
+        onShowToast('Cloud Web Push delivered! 🔔✨', 'success');
       } else {
         onShowToast(`Cloud push note: ${res.error || 'Check server status'}`, 'error');
       }

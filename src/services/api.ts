@@ -227,14 +227,17 @@ export async function deleteBusArrivalAlarm(
 }
 
 /**
- * Dispatches a real test push notification from backend server down to phone
+ * Dispatches a real push notification from backend server down to phone via Google FCM
  */
-export async function sendTestPushNotification(endpoint?: string): Promise<{ ok: boolean; error?: string }> {
+export async function sendTestPushNotification(
+  endpoint?: string,
+  customPayload?: { title?: string; body?: string; tag?: string; url?: string }
+): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await fetch(`${BASE_API_URL}/api/test-push`, {
       method: 'POST',
       headers: defaultHeaders,
-      body: JSON.stringify({ endpoint }),
+      body: JSON.stringify({ endpoint, ...customPayload }),
     });
     return await res.json();
   } catch (err: any) {

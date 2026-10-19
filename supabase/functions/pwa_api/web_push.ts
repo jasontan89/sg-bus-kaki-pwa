@@ -51,7 +51,13 @@ export async function sendPushNotification(
 
   try {
     const stringified = JSON.stringify(payload);
-    const result = await webpush.sendNotification(subscription, stringified);
+    const result = await webpush.sendNotification(subscription, stringified, {
+      TTL: 300,
+      urgency: 'high',
+      headers: {
+        Urgency: 'high',
+      },
+    });
     return { success: true, statusCode: result.statusCode };
   } catch (err: any) {
     console.error('Failed to send push notification:', err?.statusCode, err?.message);

@@ -47,21 +47,63 @@ self.addEventListener('push', (event) => {
     const title = data.title || '🚌 Bus Kaki Alert';
     const options: any = {
       body: data.body || 'Your bus is arriving soon!',
-      icon: data.icon || '/icon-192.png',
-      badge: data.badge || '/favicon.svg',
+      icon: data.icon && !data.icon.endsWith('.svg') ? data.icon : '/icon-192.png',
+      badge: data.badge && !data.badge.endsWith('.svg') ? data.badge : '/icon-192.png',
       tag: data.tag || 'bus-kaki-notification',
+      renotify: true,
+      silent: false,
       data: data.data || {},
-      vibrate: [200, 100, 200, 100, 400],
+      vibrate: [500, 200, 500, 200, 1000],
       requireInteraction: true,
       actions: [
         { action: 'open', title: 'Open Bus Kaki' },
-        { action: 'dismiss', title: 'Dismiss' }
-      ]
+        { action: 'dismiss', title: 'Dismiss' },
+      ],
     };
 
-    event.waitUntil(self.registration.showNotification(title, options as any));
+    event.waitUntil(
+      Promise.all([
+        self.registration.showNotification(title, options as any),
+        self.clients
+          .matchAll({ type: 'window', includeUncontrolled: true })
+          .then((clientList) => {
+            for (const client of clientList) {
+              client.postMessage({
+                type: 'PUSH_ALARM_TRIGGERED',
+                title,
+                body: options.body,
+                tag: options.tag,
+                data: options.data,
+              });
+            }
+          })
+          .catch(() => {}),
+      ])
+    );
   } catch (err) {
     console.error('Error handling push event:', err);
+  }
+});
+
+// Handle direct notification dispatch requests from backgrounded client window
+self.addEventListener('message', (event) => {
+  if (!event.data) return;
+
+  if (event.data.type === 'SHOW_NOTIFICATION') {
+    const { title, options } = event.data;
+    if (title) {
+      event.waitUntil(
+        self.registration.showNotification(title, {
+          icon: '/icon-192.png',
+          badge: '/icon-192.png',
+          renotify: true,
+          silent: false,
+          requireInteraction: true,
+          vibrate: [500, 250, 500, 250, 1000],
+          ...options,
+        } as any)
+      );
+    }
   }
 });
 

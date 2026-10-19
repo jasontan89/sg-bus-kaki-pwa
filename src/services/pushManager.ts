@@ -3,6 +3,8 @@
  * Handles VAPID key encoding, PushManager subscriptions, and Android notification permissions.
  */
 
+import { sendTestPushNotification } from './api';
+
 export function isPushSupported(): boolean {
   return (
     typeof window !== 'undefined' &&
@@ -153,10 +155,12 @@ export function serializeSubscription(subscription: PushSubscription) {
 }
 
 /**
- * Dispatches a native OS notification.
- * On modern Android Chrome, new Notification() in window scope is forbidden and throws:
- * "Failed to construct 'Notification': Illegal constructor. Use ServiceWorkerRegistration.showNotification() instead."
- * This helper uses navigator.serviceWorker.ready.showNotification() to guarantee native lock-screen delivery.
+ * Dispatches a native OS notification with guaranteed sound and lock-screen delivery on Android.
+ * Uses:
+ * 1. ServiceWorkerRegistration.showNotification() with renotify: true, silent: false, and PNG icons
+ * 2. Service Worker postMessage ('SHOW_NOTIFICATION') for backgrounded page execution
+ * 3. High-urgency Google FCM Web Push relay when the PWA is in the background so Android OEM skins
+ *    (Samsung OneUI, Xiaomi HyperOS, Oppo ColorOS) wake the notification channel with full system sound.
  */
 export async function dispatchNativeNotification(
   title: string,
@@ -186,13 +190,42 @@ export async function dispatchNativeNotification(
     }
   }
 
+  const safeIcon =
+    options.icon && !String(options.icon).endsWith('.svg') ? options.icon : '/icon-192.png';
+  const safeBadge =
+    options.badge && !String(options.badge).endsWith('.svg') ? options.badge : '/icon-192.png';
+
   const defaultOptions: any = {
-    icon: '/bus-mascot.svg',
-    badge: '/bus-mascot.svg',
-    vibrate: [500, 250, 500, 250, 1000],
-    requireInteraction: true,
     ...options,
+    icon: safeIcon,
+    badge: safeBadge,
+    tag: options.tag || `bus-kaki-alert-${Date.now()}`,
+    renotify: true,
+    silent: false,
+    vibrate: options.vibrate || [500, 250, 500, 250, 1000],
+    requireInteraction: true,
   };
+
+  let shownLocally = false;
+
+  // If page is hidden in background, also ask Service Worker directly via postMessage
+  if (
+    typeof document !== 'undefined' &&
+    document.visibilityState === 'hidden' &&
+    'serviceWorker' in navigator &&
+    navigator.serviceWorker.controller
+  ) {
+    try {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'SHOW_NOTIFICATION',
+        title,
+        options: defaultOptions,
+      });
+      shownLocally = true;
+    } catch {
+      // Safe fail
+    }
+  }
 
   // Primary: Use Service Worker registration (Android Chrome requirement)
   if ('serviceWorker' in navigator) {
@@ -200,12 +233,33 @@ export async function dispatchNativeNotification(
       const reg = await navigator.serviceWorker.ready;
       if (reg && typeof reg.showNotification === 'function') {
         await reg.showNotification(title, defaultOptions);
-        return true;
+        shownLocally = true;
       }
     } catch (swErr) {
       console.warn('SW showNotification fallback needed:', swErr);
     }
   }
+
+  // Also relay via high-urgency FCM Web Push when PWA is in background so Android OS plays system notification sound
+  if (
+    typeof document !== 'undefined' &&
+    (document.visibilityState === 'hidden' || options.forceCloudPush)
+  ) {
+    getCurrentSubscription()
+      .then((sub) => {
+        if (sub && sub.endpoint) {
+          sendTestPushNotification(sub.endpoint, {
+            title,
+            body: defaultOptions.body || '',
+            tag: defaultOptions.tag,
+            url: defaultOptions.data?.url || '/',
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }
+
+  if (shownLocally) return true;
 
   // Fallback: Window Notification for desktop browsers
   try {

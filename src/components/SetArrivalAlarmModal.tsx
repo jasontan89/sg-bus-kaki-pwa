@@ -3,6 +3,7 @@ import { Bell, X, Check, Smartphone, AlertCircle } from 'lucide-react';
 import { subscribeToPush, serializeSubscription, getNotificationPermission } from '../services/pushManager';
 import { createBusArrivalAlarm, registerPushSubscription, fetchVapidPublicKey } from '../services/api';
 import { saveStoredBusAlarm } from '../services/alarmStorage';
+import { unlockAudio, startBackgroundAudioKeepAlive } from '../services/alarmManager';
 
 interface SetArrivalAlarmModalProps {
   isOpen: boolean;
@@ -29,6 +30,9 @@ export const SetArrivalAlarmModal: React.FC<SetArrivalAlarmModalProps> = ({
   if (!isOpen) return null;
 
   const handleArmAlarm = async () => {
+    // Unlock Web Audio & HTML5 Audio during direct user tap gesture so background chime can play
+    unlockAudio();
+    startBackgroundAudioKeepAlive(`Bus ${serviceNo} @ ${busStopName}`);
     setLoading(true);
     try {
       // 1. Fetch public key

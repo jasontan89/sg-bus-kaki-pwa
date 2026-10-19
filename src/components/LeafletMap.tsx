@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { BusStop } from '../types/transit';
+import { calculateHaversineDistanceMeters } from '../services/alarmManager';
 import { Navigation } from 'lucide-react';
 
 interface LeafletMapProps {
@@ -24,7 +25,10 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const userMarkerRef = useRef<L.CircleMarker | null>(null);
+  const userHaloRef = useRef<L.Circle | null>(null);
   const hasAutoCenteredRef = useRef(false);
+  const userPannedMapRef = useRef(false);
+  const lastCenteredCoordsRef = useRef<{ lat: number; lon: number } | null>(null);
 
   // Initialize Leaflet map
   useEffect(() => {
@@ -39,6 +43,11 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
         zoom: 16,
         zoomControl: false,
         attributionControl: false,
+      });
+
+      // Track if user manually drags the map so we don't override their manual pan
+      map.on('dragstart', () => {
+        userPannedMapRef.current = true;
       });
 
       // Dark style OpenStreetMap tiles
@@ -72,19 +81,34 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
     };
   }, []);
 
-  // Update commuter GPS location marker and auto-jump to current location
+  // Update commuter GPS location marker and smoothly follow location stabilization
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || userLat === null || userLon === null) return;
 
-    // Auto-jump to current location on first GPS fix!
-    if (!hasAutoCenteredRef.current && userLat > 1.0 && userLon > 100.0) {
-      map.setView([userLat, userLon], 16, { animate: true });
-      hasAutoCenteredRef.current = true;
+    if (userLat > 1.0 && userLon > 100.0) {
+      const movedMeters = lastCenteredCoordsRef.current
+        ? calculateHaversineDistanceMeters(
+            userLat,
+            userLon,
+            lastCenteredCoordsRef.current.lat,
+            lastCenteredCoordsRef.current.lon
+          )
+        : null;
+
+      // Center on first fix or when GPS stabilizes / updates (>15m) unless user manually dragged map
+      if (!hasAutoCenteredRef.current || (!userPannedMapRef.current && (movedMeters === null || movedMeters >= 15))) {
+        map.setView([userLat, userLon], map.getZoom() || 16, { animate: hasAutoCenteredRef.current });
+        hasAutoCenteredRef.current = true;
+        lastCenteredCoordsRef.current = { lat: userLat, lon: userLon };
+      }
     }
 
     if (userMarkerRef.current) {
       userMarkerRef.current.setLatLng([userLat, userLon]);
+      if (userHaloRef.current) {
+        userHaloRef.current.setLatLng([userLat, userLon]);
+      }
     } else {
       userMarkerRef.current = L.circleMarker([userLat, userLon], {
         radius: 8,
@@ -95,7 +119,7 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
       }).addTo(map);
 
       // Accuracy halo
-      L.circle([userLat, userLon], {
+      userHaloRef.current = L.circle([userLat, userLon], {
         radius: 40,
         color: '#38bdf8',
         weight: 1,
@@ -168,8 +192,10 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
   }, [stops, selectedStopCode, onSelectStop]);
 
   const handleRecenterClick = () => {
+    userPannedMapRef.current = false;
     if (mapInstanceRef.current && userLat !== null && userLon !== null) {
       mapInstanceRef.current.setView([userLat, userLon], 16, { animate: true });
+      lastCenteredCoordsRef.current = { lat: userLat, lon: userLon };
     }
     onRecenter();
   };

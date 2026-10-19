@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BusStop, BusArrivalData, FavoriteStop } from '../types/transit';
 import { fetchNearbyStops, fetchBusArrivals } from '../services/api';
 import { isFavorite, saveFavorite, removeFavorite } from '../services/offlineStorage';
+import { calculateHaversineDistanceMeters } from '../services/alarmManager';
 import { LeafletMap } from '../components/LeafletMap';
 import { BusArrivalCard } from '../components/BusArrivalCard';
 import { BusFilterModal } from '../components/BusFilterModal';
@@ -35,6 +36,11 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
   const [loadingArrivals, setLoadingArrivals] = useState(false);
   const [isFav, setIsFav] = useState(false);
 
+  // Track whether the user manually tapped a specific bus stop
+  const userManuallySelectedRef = useRef<boolean>(false);
+  const lastFetchedCoordsRef = useRef<{ lat: number; lon: number; isFallback: boolean } | null>(null);
+  const selectedStopCodeRef = useRef<string | null>(null);
+
   // Modals state
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [hiddenServices, setHiddenServices] = useState<string[]>([]);
@@ -43,28 +49,11 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
     serviceNo: string;
   }>({ isOpen: false, serviceNo: '' });
 
-  // Load nearby stops when coordinates change
-  useEffect(() => {
-    const loadStops = async () => {
-      setLoadingStops(true);
-      const lat = userLat || 1.2968;
-      const lon = userLon || 103.8525;
-      try {
-        const nearby = await fetchNearbyStops(lat, lon, 15);
-        setStops(nearby);
-        if (nearby.length > 0 && !selectedStop) {
-          handleSelectStop(nearby[0]);
-        }
-      } catch (err) {
-        console.error('Error loading nearby stops:', err);
-      } finally {
-        setLoadingStops(false);
-      }
-    };
-    loadStops();
-  }, [userLat, userLon]);
-
-  const handleSelectStop = async (stop: BusStop) => {
+  const handleSelectStop = async (stop: BusStop, isManualSelection = false) => {
+    if (isManualSelection) {
+      userManuallySelectedRef.current = true;
+    }
+    selectedStopCodeRef.current = stop.bus_stop_code;
     setSelectedStop(stop);
     setLoadingArrivals(true);
     // Restore saved bus filter preferences for this stop code
@@ -86,6 +75,73 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
     } finally {
       setLoadingArrivals(false);
     }
+  };
+
+  // Load nearby stops when real GPS coordinates arrive or stabilize
+  useEffect(() => {
+    let fallbackTimer: any = null;
+    let isCancelled = false;
+
+    const loadStopsForCoords = async (lat: number, lon: number, isFallback: boolean) => {
+      // Avoid redundant fetches on sub-20m GPS micro-jitter once real GPS is locked
+      if (!isFallback && lastFetchedCoordsRef.current && !lastFetchedCoordsRef.current.isFallback) {
+        const movedMeters = calculateHaversineDistanceMeters(
+          lat,
+          lon,
+          lastFetchedCoordsRef.current.lat,
+          lastFetchedCoordsRef.current.lon
+        );
+        if (movedMeters !== null && movedMeters < 20) {
+          return;
+        }
+      }
+
+      setLoadingStops(true);
+      try {
+        const nearby = await fetchNearbyStops(lat, lon, 15);
+        if (isCancelled) return;
+
+        lastFetchedCoordsRef.current = { lat, lon, isFallback };
+        setStops(nearby);
+
+        // Auto-select the closest stop if user hasn't manually picked a stop yet,
+        // or if transitioning from fallback/coarse GPS to stabilized real GPS
+        if (nearby.length > 0 && !userManuallySelectedRef.current) {
+          if (selectedStopCodeRef.current !== nearby[0].bus_stop_code) {
+            handleSelectStop(nearby[0], false);
+          }
+        }
+      } catch (err) {
+        console.error('Error loading nearby stops:', err);
+      } finally {
+        if (!isCancelled) {
+          setLoadingStops(false);
+        }
+      }
+    };
+
+    if (userLat !== null && userLon !== null) {
+      loadStopsForCoords(userLat, userLon, false);
+    } else if (!lastFetchedCoordsRef.current) {
+      // Wait for real GPS to stabilize first; only fall back to central SG if GPS takes > 6 seconds
+      setLoadingStops(true);
+      fallbackTimer = setTimeout(() => {
+        if (!isCancelled && userLat === null && userLon === null && !lastFetchedCoordsRef.current) {
+          loadStopsForCoords(1.3521, 103.8198, true);
+        }
+      }, 6000);
+    }
+
+    return () => {
+      isCancelled = true;
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+    };
+  }, [userLat, userLon]);
+
+  const handleRecenterAndRefresh = () => {
+    userManuallySelectedRef.current = false;
+    lastFetchedCoordsRef.current = null;
+    onRefreshLocation();
   };
 
   const handleRefreshArrivals = async () => {
@@ -143,8 +199,8 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
           userLon={userLon}
           stops={stops}
           selectedStopCode={selectedStop?.bus_stop_code}
-          onSelectStop={handleSelectStop}
-          onRecenter={onRefreshLocation}
+          onSelectStop={(stop) => handleSelectStop(stop, true)}
+          onRecenter={handleRecenterAndRefresh}
         />
       </div>
 
@@ -155,7 +211,11 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
             <MapPin className="w-3.5 h-3.5 text-brand-sky" />
             Nearby Stops ({stops.length})
           </span>
-          {loadingStops && <span className="text-[10px] text-brand-sky animate-pulse">Updating...</span>}
+          {(loadingStops || (userLat === null && stops.length === 0)) && (
+            <span className="text-[10px] text-brand-sky animate-pulse">
+              {userLat === null ? 'Acquiring GPS signal...' : 'Updating...'}
+            </span>
+          )}
         </div>
 
         <div className="flex space-x-2 overflow-x-auto pb-1 scrollbar-none">
@@ -164,7 +224,7 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
             return (
               <button
                 key={stop.bus_stop_code}
-                onClick={() => handleSelectStop(stop)}
+                onClick={() => handleSelectStop(stop, true)}
                 className={`flex-shrink-0 w-44 text-left p-2.5 rounded-xl border transition-all ${
                   isSelected
                     ? 'bg-brand-blue/20 border-brand-sky text-white shadow-lg'

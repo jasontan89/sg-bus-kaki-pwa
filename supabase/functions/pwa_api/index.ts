@@ -113,7 +113,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: true });
     }
 
-    // 2b. Test Web Push (sends a real push notification to verify delivery)
+    // 2b. Test / Instant Relay Web Push (sends a real FCM push notification to verify or wake background device)
     if (req.method === 'POST' && path.endsWith('/test-push')) {
       const body = await req.json().catch(() => ({}));
       const endpoint = body.endpoint;
@@ -149,12 +149,12 @@ Deno.serve(async (req: Request) => {
           },
         },
         {
-          title: '🚌 SG Bus Kaki Test Alert',
-          body: 'Success! Web Push is working in the background on your phone! 🔔✨',
+          title: body.title || '🚌 SG Bus Kaki Test Alert',
+          body: body.body || 'Success! Web Push is working in the background on your phone! 🔔✨',
           icon: '/icon-192.png',
-          badge: '/favicon.svg',
-          tag: 'test-push-alert',
-          data: { url: '/' },
+          badge: '/icon-192.png',
+          tag: body.tag || 'test-push-alert',
+          data: { url: body.url || '/' },
         }
       );
 
@@ -437,7 +437,7 @@ Deno.serve(async (req: Request) => {
                     title: `🚌 Bus ${alarm.service_no} Arriving!`,
                     body: `Arriving in ${etaMins <= 0 ? 'now' : `${etaMins} mins`} at ${alarm.bus_stop_name || alarm.bus_stop_code}.`,
                     icon: '/icon-192.png',
-                    badge: '/favicon.svg',
+                    badge: '/icon-192.png',
                     tag: `bus-alarm-${alarm.id}`,
                     data: {
                       stopCode: alarm.bus_stop_code,

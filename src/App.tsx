@@ -17,11 +17,22 @@ import {
   stopBackgroundAudioKeepAlive,
   unlockAudio,
   releaseScreenWakeLock,
+  registerBackgroundTickCallback,
 } from './services/alarmManager';
-import { dispatchNativeNotification } from './services/pushManager';
+import {
+  dispatchNativeNotification,
+  subscribeToPush,
+  serializeSubscription,
+} from './services/pushManager';
+import {
+  fetchBusArrivals,
+  deleteBusArrivalAlarm,
+  fetchVapidPublicKey,
+  registerPushSubscription,
+} from './services/api';
 import { seedBusStops, getCachedStopsCount, getFavorites } from './services/offlineStorage';
 import { SEED_BUS_STOPS } from './services/busStopsData';
-import { getStoredBusAlarms } from './services/alarmStorage';
+import { getStoredBusAlarms, removeStoredBusAlarm } from './services/alarmStorage';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('nearby');
@@ -52,10 +63,27 @@ export const App: React.FC = () => {
     keepScreenAwake: false,
   });
 
+  // Synchronous refs for background execution (bypasses React 18 background state batching)
+  const alightAlarmRef = useRef<AlightingAlarmState>(alightAlarm);
   const geoWatchId = useRef<number | null>(null);
+  const bestAccuracyRef = useRef<number>(Infinity);
+  const lastFixTimeRef = useRef<number>(0);
+  const lastValidCoordsRef = useRef<{ lat: number; lon: number } | null>(null);
+  const coarseStabilizeTimerRef = useRef<any>(null);
+  const lastBusAlarmCheckRef = useRef<number>(0);
 
   useEffect(() => {
-    const updateCount = () => setBusAlarmsCount(getStoredBusAlarms().length);
+    alightAlarmRef.current = alightAlarm;
+  }, [alightAlarm]);
+
+  useEffect(() => {
+    const updateCount = () => {
+      const alarms = getStoredBusAlarms();
+      setBusAlarmsCount(alarms.length);
+      if (alarms.length === 0 && !alightAlarmRef.current.armed) {
+        stopBackgroundAudioKeepAlive();
+      }
+    };
     window.addEventListener('sg_bus_alarms_updated', updateCount);
     return () => window.removeEventListener('sg_bus_alarms_updated', updateCount);
   }, []);
@@ -132,82 +160,276 @@ export const App: React.FC = () => {
     setDeferredPrompt(null);
   };
 
-  // GPS Tracking & Distance Watcher
-  const updateLocation = (pos: GeolocationPosition) => {
-    const lat = pos.coords.latitude;
-    const lon = pos.coords.longitude;
-    setUserLat(lat);
-    setUserLon(lon);
+  // Synchronous proximity evaluator that executes immediately even when PWA is backgrounded
+  const evaluateAlightProximity = (lat: number, lon: number) => {
+    const current = alightAlarmRef.current;
+    if (!current.armed) return;
 
-    // If commute alarm is armed, recalculate remaining distance
-    setAlightAlarm((prev) => {
-      if (!prev.armed) return prev;
+    const dist = calculateHaversineDistanceMeters(lat, lon, current.targetLat, current.targetLon);
+    if (dist === null) return;
 
-      const dist = calculateHaversineDistanceMeters(lat, lon, prev.targetLat, prev.targetLon);
-      const isNowTriggered = dist !== null && dist <= prev.thresholdMeters;
+    const isNowTriggered = dist <= current.thresholdMeters;
 
-      // When first entering proximity
-      if (isNowTriggered && !prev.isTriggered) {
-        startContinuousChime();
-        dispatchNativeNotification(`⏰ Alight Now: ${prev.stopName}`, {
-          body: `You are within ${prev.thresholdMeters}m of ${prev.stopName}! Prepare to alight now.`,
-          icon: '/bus-mascot.svg',
-          badge: '/bus-mascot.svg',
-          tag: 'alight-now-alert',
-          renotify: true,
-          vibrate: [500, 250, 500, 250, 1000],
-        });
-        showToast(`⏰ You are within ${prev.thresholdMeters}m of ${prev.stopName}! Prepare to alight.`, 'error');
-      }
+    if (isNowTriggered && !current.isTriggered) {
+      // Update ref synchronously first so duplicate callbacks never double-fire
+      const updatedState: AlightingAlarmState = {
+        ...current,
+        currentDistanceMeters: dist,
+        isTriggered: true,
+      };
+      alightAlarmRef.current = updatedState;
+      setAlightAlarm(updatedState);
 
-      return {
-        ...prev,
+      startContinuousChime(`⏰ Alight Now: ${current.stopName}`);
+      dispatchNativeNotification(`⏰ Alight Now: ${current.stopName}`, {
+        body: `You are within ${current.thresholdMeters}m of ${current.stopName} (${dist}m away)! Prepare to alight now.`,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        tag: 'alight-now-alert',
+        renotify: true,
+        silent: false,
+        forceCloudPush: true,
+        vibrate: [500, 250, 500, 250, 1000],
+      });
+      showToast(`⏰ You are within ${current.thresholdMeters}m of ${current.stopName}! Prepare to alight.`, 'error');
+    } else if (current.currentDistanceMeters !== dist || current.isTriggered !== isNowTriggered) {
+      const updatedState: AlightingAlarmState = {
+        ...current,
         currentDistanceMeters: dist,
         isTriggered: isNowTriggered,
       };
-    });
+      alightAlarmRef.current = updatedState;
+      setAlightAlarm(updatedState);
+    }
   };
 
-  const startGPS = () => {
+  // GPS Tracking & Anti-Jump Accuracy Filter
+  const updateLocation = (pos: GeolocationPosition) => {
+    const lat = pos.coords.latitude;
+    const lon = pos.coords.longitude;
+    const accuracy = pos.coords.accuracy || 9999;
+    const now = Date.now();
+
+    if (!lat || !lon || isNaN(lat) || isNaN(lon)) return;
+
+    // Always evaluate alighting proximity if accuracy is reasonable (<= 350m)
+    if (accuracy <= 350) {
+      evaluateAlightProximity(lat, lon);
+    }
+
+    const applyAcceptedLocation = (acceptedLat: number, acceptedLon: number, acceptedAcc: number) => {
+      lastValidCoordsRef.current = { lat: acceptedLat, lon: acceptedLon };
+      lastFixTimeRef.current = Date.now();
+      bestAccuracyRef.current = Math.min(bestAccuracyRef.current, acceptedAcc);
+      setUserLat(acceptedLat);
+      setUserLon(acceptedLon);
+    };
+
+    // Case 1: Initial startup before any location is locked
+    // Wait up to 2.2s if the first reading is a coarse cell-tower triangulation (>180m)
+    // so the fine GPS satellite fix locks in cleanly without snapping to an inaccurate stop first.
+    if (!lastValidCoordsRef.current) {
+      if (accuracy > 180) {
+        if (!coarseStabilizeTimerRef.current) {
+          coarseStabilizeTimerRef.current = setTimeout(() => {
+            coarseStabilizeTimerRef.current = null;
+            if (!lastValidCoordsRef.current) {
+              applyAcceptedLocation(lat, lon, accuracy);
+            }
+          }, 2200);
+        }
+        return;
+      }
+      if (coarseStabilizeTimerRef.current) {
+        clearTimeout(coarseStabilizeTimerRef.current);
+        coarseStabilizeTimerRef.current = null;
+      }
+      applyAcceptedLocation(lat, lon, accuracy);
+      return;
+    }
+
+    // Case 2: Subsequent updates & returning from background
+    // Reject sudden coarse cell-tower/Wi-Fi location jumps (>150m accuracy when we already have a finer fix)
+    const timeSinceLastFix = now - lastFixTimeRef.current;
+    if (
+      accuracy > 150 &&
+      accuracy > bestAccuracyRef.current * 2.5 &&
+      timeSinceLastFix < 45000
+    ) {
+      return;
+    }
+
+    applyAcceptedLocation(lat, lon, accuracy);
+  };
+
+  const startGPS = (forceRestartWatch = false) => {
     if (!navigator.geolocation) return;
+
+    // Relax accuracy floor slightly on manual refresh / resume so fresh real-time GPS fixes apply immediately
+    if (bestAccuracyRef.current < 80) {
+      bestAccuracyRef.current = 80;
+    }
 
     navigator.geolocation.getCurrentPosition(
       updateLocation,
       (err) => {
-        console.warn('Geolocation initial error:', err);
-        // Do not force fake City Hall coordinates on error;
-        // keeping userLat null lets remaining distance display 'Acquiring GPS...'
+        console.warn('Geolocation getCurrentPosition notice:', err);
       },
-      { enableHighAccuracy: true, timeout: 10000 }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
+
+    if (forceRestartWatch && geoWatchId.current !== null) {
+      navigator.geolocation.clearWatch(geoWatchId.current);
+      geoWatchId.current = null;
+    }
 
     if (geoWatchId.current === null) {
       geoWatchId.current = navigator.geolocation.watchPosition(
         updateLocation,
         (err) => console.warn('Geo watch error:', err),
-        { enableHighAccuracy: true, maximumAge: 5000 }
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
       );
     }
   };
 
+  // Client-side background & foreground monitor for active Bus Arrival Alarms
+  const checkActiveBusAlarms = async () => {
+    const now = Date.now();
+    if (now - lastBusAlarmCheckRef.current < 12000) return;
+    lastBusAlarmCheckRef.current = now;
+
+    const alarms = getStoredBusAlarms();
+    if (alarms.length === 0) return;
+
+    for (const alarm of alarms) {
+      try {
+        const arrivalData = await fetchBusArrivals(alarm.bus_stop_code);
+        const svc = (arrivalData.services || []).find(
+          (s) => s.serviceNo.toLowerCase() === alarm.service_no.toLowerCase()
+        );
+        const etaMins = svc?.nextBus?.etaMinutes;
+
+        if (etaMins !== null && etaMins !== undefined && etaMins <= alarm.lead_mins) {
+          // Remove from local storage first so it only triggers once
+          const alarmKey = alarm.id || `${alarm.bus_stop_code}_${alarm.service_no}`;
+          removeStoredBusAlarm(alarmKey);
+          if (alarm.id) {
+            deleteBusArrivalAlarm(alarm.id, alarm.endpoint).catch(() => {});
+          }
+
+          const title = `🚌 Bus ${alarm.service_no} Arriving!`;
+          const body = `Bus ${alarm.service_no} is arriving ${
+            etaMins <= 0 ? 'now' : `in ${etaMins} mins`
+          } at ${alarm.bus_stop_name || alarm.bus_stop_code}!`;
+
+          startContinuousChime(title, 14000);
+          dispatchNativeNotification(title, {
+            body,
+            icon: '/icon-192.png',
+            badge: '/icon-192.png',
+            tag: `bus-alarm-${alarmKey}`,
+            renotify: true,
+            silent: false,
+            forceCloudPush: true,
+            vibrate: [500, 250, 500, 250, 1000],
+          });
+          showToast(`⏰ ${body}`, 'error');
+        }
+      } catch (err) {
+        console.warn('Error checking bus arrival alarm:', err);
+      }
+    }
+  };
+
+  // Start GPS, visibility recovery, Service Worker push listener, and background heartbeat
   useEffect(() => {
-    startGPS();
+    startGPS(false);
+
+    // Immediately recover real-time GPS and check alarms when user returns to PWA from background
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        startGPS(true);
+        checkActiveBusAlarms();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('pageshow', handleVisibilityOrFocus);
+
+    // Listen for PUSH_ALARM_TRIGGERED from Service Worker when a cloud push arrives in background
+    const handleSWMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'PUSH_ALARM_TRIGGERED') {
+        startContinuousChime(event.data.title || '🚌 Bus Kaki Alert', 14000);
+        checkActiveBusAlarms();
+      }
+    };
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSWMessage);
+    }
+
+    // Unthrottled background worker & audio tick callback (runs every ~3.5s even when backgrounded)
+    const unregisterBgTick = registerBackgroundTickCallback(() => {
+      if (alightAlarmRef.current.armed && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          updateLocation,
+          () => {},
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 3500 }
+        );
+      }
+      if (getStoredBusAlarms().length > 0) {
+        checkActiveBusAlarms();
+      }
+    });
+
+    // Regular foreground interval for bus arrival alarms even if background audio wasn't started yet
+    const fgAlarmInterval = setInterval(() => {
+      if (getStoredBusAlarms().length > 0) {
+        checkActiveBusAlarms();
+      }
+    }, 15000);
+
     return () => {
       if (geoWatchId.current !== null) {
         navigator.geolocation.clearWatch(geoWatchId.current);
       }
+      if (coarseStabilizeTimerRef.current) {
+        clearTimeout(coarseStabilizeTimerRef.current);
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('pageshow', handleVisibilityOrFocus);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleSWMessage);
+      }
+      unregisterBgTick();
+      clearInterval(fgAlarmInterval);
     };
   }, []);
 
   // Arm Alighting Wake-Up Alarm
   const handleArmAlightAlarm = async (stop: BusStop) => {
-    // 1. Crucial for mobile audio: unlock Web Audio Context during direct user touch gesture
+    // 1. Crucial for mobile audio: unlock Web Audio Context & HTML5 Audio during direct user touch gesture
     unlockAudio();
 
-    // 2. Request native notification permission if not yet determined (non-blocking)
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+    // 2. Request native notification permission and ensure Web Push subscription is registered for background FCM relay
+    if (typeof window !== 'undefined' && 'Notification' in window) {
       try {
-        Notification.requestPermission().catch(() => {});
+        const permPromise =
+          Notification.permission === 'default'
+            ? Notification.requestPermission()
+            : Promise.resolve(Notification.permission);
+        permPromise
+          .then(async (perm) => {
+            if (perm === 'granted') {
+              const vapidKey = await fetchVapidPublicKey();
+              const sub = await subscribeToPush(vapidKey);
+              if (sub) {
+                await registerPushSubscription(serializeSubscription(sub));
+              }
+            }
+          })
+          .catch(() => {});
       } catch {
         // Safe fail
       }
@@ -245,20 +467,24 @@ export const App: React.FC = () => {
       keepScreenAwake: false,
     };
 
+    alightAlarmRef.current = newState;
     setAlightAlarm(newState);
-    // Screen awake is OFF by default as per user design; wake lock only requested if user toggles ON in HUD
+    // Start 20s sub-audible MediaSession keep-alive + Web Worker heartbeat
     startBackgroundAudioKeepAlive(stop.description);
+    startGPS(true);
     setActiveTab('hud');
     showToast(`Alight alarm armed for ${stop.description}!`, 'success');
 
     // If commuter is already at destination upon arming
     if (isTriggered) {
-      startContinuousChime();
+      startContinuousChime(`⏰ Alight Now: ${stop.description}`);
       dispatchNativeNotification(`⏰ Alight Now: ${stop.description}`, {
         body: `You are already within 500m of ${stop.description}!`,
-        icon: '/bus-mascot.svg',
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
         tag: 'alight-now-alert',
         renotify: true,
+        silent: false,
         vibrate: [500, 250, 500, 250, 1000],
       });
     }
@@ -266,13 +492,17 @@ export const App: React.FC = () => {
 
   const handleStopAlarm = async () => {
     stopContinuousChime();
-    stopBackgroundAudioKeepAlive();
+    if (getStoredBusAlarms().length === 0) {
+      stopBackgroundAudioKeepAlive();
+    }
     await releaseScreenWakeLock();
-    setAlightAlarm((prev) => ({
-      ...prev,
+    const resetState: AlightingAlarmState = {
+      ...alightAlarmRef.current,
       armed: false,
       isTriggered: false,
-    }));
+    };
+    alightAlarmRef.current = resetState;
+    setAlightAlarm(resetState);
     setActiveTab((current) => (current === 'hud' ? 'nearby' : current));
     showToast('Ride ended. Welcome to your destination! 🚌', 'success');
   };
@@ -300,7 +530,7 @@ export const App: React.FC = () => {
           <NearbyView
             userLat={userLat}
             userLon={userLon}
-            onRefreshLocation={startGPS}
+            onRefreshLocation={() => startGPS(true)}
             onArmAlightAlarm={handleArmAlightAlarm}
             onViewRoute={(svc) => {
               setSearchInitialService(svc);
@@ -350,12 +580,18 @@ export const App: React.FC = () => {
           alarmState={alightAlarm}
           onStopAlarm={handleStopAlarm}
           onUpdateKeepAwake={(enabled) =>
-            setAlightAlarm((prev) => ({ ...prev, keepScreenAwake: enabled }))
+            setAlightAlarm((prev) => {
+              const next = { ...prev, keepScreenAwake: enabled };
+              alightAlarmRef.current = next;
+              return next;
+            })
           }
           onUpdateThreshold={(meters) =>
             setAlightAlarm((prev) => {
               const triggered = (prev.currentDistanceMeters ?? 9999) <= meters;
-              return { ...prev, thresholdMeters: meters, isTriggered: triggered };
+              const next = { ...prev, thresholdMeters: meters, isTriggered: triggered };
+              alightAlarmRef.current = next;
+              return next;
             })
           }
           onCloseHUD={() => setActiveTab('nearby')}
