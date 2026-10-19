@@ -161,6 +161,110 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: pushResult.success, result: pushResult });
     }
 
+    // Helper: Check all active unfired bus arrival alarms in Supabase & dispatch high-urgency FCM Web Push
+    const runAlarmCheckPass = async () => {
+      const { data: alarms, error } = await supabase
+        .from('pwa_bus_alarms')
+        .select('id, endpoint, bus_stop_code, bus_stop_name, service_no, lead_mins')
+        .eq('fired', false)
+        .gt('expires_at', new Date().toISOString());
+
+      if (error || !alarms || alarms.length === 0) {
+        return { activeCount: 0, triggeredCount: 0, remainingCount: 0 };
+      }
+
+      let passTriggered = 0;
+
+      for (const alarm of alarms) {
+        try {
+          let { data: sub } = await supabase
+            .from('pwa_push_subscriptions')
+            .select('endpoint, p256dh, auth')
+            .eq('endpoint', alarm.endpoint)
+            .maybeSingle();
+
+          if (!sub) {
+            const { data: latestSub } = await supabase
+              .from('pwa_push_subscriptions')
+              .select('endpoint, p256dh, auth')
+              .order('updated_at', { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            sub = latestSub;
+          }
+
+          if (!sub || !sub.p256dh || !sub.auth) continue;
+
+          const ltaUrl = `${LTA_API_URL}/v3/BusArrival?BusStopCode=${encodeURIComponent(
+            alarm.bus_stop_code
+          )}&ServiceNo=${encodeURIComponent(alarm.service_no)}`;
+          const ltaRes = await fetch(ltaUrl, {
+            headers: { AccountKey: LTA_API_KEY, accept: 'application/json' },
+          });
+
+          if (ltaRes.ok) {
+            const data = await ltaRes.json();
+            const service = (data.Services || [])[0];
+            if (service && service.NextBus?.EstimatedArrival) {
+              const etaMins = calculateEtaMinutes(service.NextBus.EstimatedArrival);
+
+              if (etaMins !== null && etaMins <= alarm.lead_mins) {
+                const payload = {
+                  title: `🚌 Bus ${alarm.service_no} Arriving!`,
+                  body: `Arriving ${
+                    etaMins <= 0 ? 'now' : `in ${etaMins} mins`
+                  } at ${alarm.bus_stop_name || alarm.bus_stop_code}! Prepare to board.`,
+                  icon: '/icon-192.png',
+                  badge: '/icon-192.png',
+                  tag: `bus-alarm-${alarm.id}-${Date.now()}`,
+                  data: {
+                    alarmId: alarm.id,
+                    stopCode: alarm.bus_stop_code,
+                    serviceNo: alarm.service_no,
+                    url: `/?stop=${alarm.bus_stop_code}`,
+                  },
+                };
+
+                const subscriptionObj = {
+                  endpoint: sub.endpoint,
+                  keys: {
+                    p256dh: sub.p256dh,
+                    auth: sub.auth,
+                  },
+                };
+
+                const pushRes = await sendPushNotification(subscriptionObj, payload);
+
+                if (pushRes.success) {
+                  await supabase
+                    .from('pwa_bus_alarms')
+                    .update({ fired: true })
+                    .eq('id', alarm.id);
+                  passTriggered++;
+
+                  // Send a second reinforcement push 2.5s later so Android OEM skins wake & ring reliably
+                  setTimeout(() => {
+                    sendPushNotification(subscriptionObj, {
+                      ...payload,
+                      tag: `bus-alarm-${alarm.id}-repeat-${Date.now()}`,
+                    }).catch(() => {});
+                  }, 2500);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error(`Error processing alarm ${alarm.id}:`, err);
+        }
+      }
+
+      return {
+        activeCount: alarms.length,
+        triggeredCount: passTriggered,
+        remainingCount: Math.max(0, alarms.length - passTriggered),
+      };
+    };
+
     // 3. Set Bus Arrival Alarm
     if (req.method === 'POST' && path.endsWith('/bus-alarm')) {
       const body = await req.json();
@@ -185,6 +289,22 @@ Deno.serve(async (req: Request) => {
       if (error) {
         console.error('Alarm DB insert error:', error);
         return jsonResponse({ error: error.message }, 500);
+      }
+
+      // Immediately schedule background check passes at +4s and +20s so if the bus is already
+      // within leadMins when the user exits the app, the cloud push arrives within seconds!
+      const edgeRuntime = (globalThis as any).EdgeRuntime;
+      if (edgeRuntime && typeof edgeRuntime.waitUntil === 'function') {
+        edgeRuntime.waitUntil(
+          (async () => {
+            await new Promise((r) => setTimeout(r, 4000));
+            const p1 = await runAlarmCheckPass();
+            if (p1.remainingCount > 0) {
+              await new Promise((r) => setTimeout(r, 16000));
+              await runAlarmCheckPass();
+            }
+          })()
+        );
       }
 
       return jsonResponse({ ok: true, alarmId: data.id });
@@ -387,111 +507,6 @@ Deno.serve(async (req: Request) => {
       if (!isAuthorized) {
         return jsonResponse({ error: 'Unauthorized cron invocation' }, 401);
       }
-
-      const runAlarmCheckPass = async () => {
-        const { data: alarms, error } = await supabase
-          .from('pwa_bus_alarms')
-          .select('id, endpoint, bus_stop_code, bus_stop_name, service_no, lead_mins')
-          .eq('fired', false)
-          .gt('expires_at', new Date().toISOString());
-
-        if (error || !alarms || alarms.length === 0) {
-          return { activeCount: 0, triggeredCount: 0, remainingCount: 0 };
-        }
-
-        let passTriggered = 0;
-
-        for (const alarm of alarms) {
-          try {
-            // Look up push subscription for this alarm's endpoint
-            let { data: sub } = await supabase
-              .from('pwa_push_subscriptions')
-              .select('endpoint, p256dh, auth')
-              .eq('endpoint', alarm.endpoint)
-              .maybeSingle();
-
-            if (!sub) {
-              const { data: latestSub } = await supabase
-                .from('pwa_push_subscriptions')
-                .select('endpoint, p256dh, auth')
-                .order('updated_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
-              sub = latestSub;
-            }
-
-            if (!sub || !sub.p256dh || !sub.auth) continue;
-
-            // Fetch arrival for stop & service from LTA DataMall
-            const ltaUrl = `${LTA_API_URL}/v3/BusArrival?BusStopCode=${encodeURIComponent(
-              alarm.bus_stop_code
-            )}&ServiceNo=${encodeURIComponent(alarm.service_no)}`;
-            const ltaRes = await fetch(ltaUrl, {
-              headers: { AccountKey: LTA_API_KEY, accept: 'application/json' },
-            });
-
-            if (ltaRes.ok) {
-              const data = await ltaRes.json();
-              const service = (data.Services || [])[0];
-              if (service && service.NextBus?.EstimatedArrival) {
-                const etaMins = calculateEtaMinutes(service.NextBus.EstimatedArrival);
-
-                if (etaMins !== null && etaMins <= alarm.lead_mins) {
-                  const payload = {
-                    title: `🚌 Bus ${alarm.service_no} Arriving!`,
-                    body: `Arriving ${
-                      etaMins <= 0 ? 'now' : `in ${etaMins} mins`
-                    } at ${alarm.bus_stop_name || alarm.bus_stop_code}! Prepare to board.`,
-                    icon: '/icon-192.png',
-                    badge: '/icon-192.png',
-                    tag: `bus-alarm-${alarm.id}`,
-                    data: {
-                      alarmId: alarm.id,
-                      stopCode: alarm.bus_stop_code,
-                      serviceNo: alarm.service_no,
-                      url: `/?stop=${alarm.bus_stop_code}`,
-                    },
-                  };
-
-                  const subscriptionObj = {
-                    endpoint: sub.endpoint,
-                    keys: {
-                      p256dh: sub.p256dh,
-                      auth: sub.auth,
-                    },
-                  };
-
-                  const pushRes = await sendPushNotification(subscriptionObj, payload);
-
-                  if (pushRes.success) {
-                    await supabase
-                      .from('pwa_bus_alarms')
-                      .update({ fired: true })
-                      .eq('id', alarm.id);
-                    passTriggered++;
-
-                    // Send a second reinforcement push 2.5s later so Android OEM skins wake & ring reliably
-                    setTimeout(() => {
-                      sendPushNotification(subscriptionObj, {
-                        ...payload,
-                        tag: `bus-alarm-${alarm.id}-repeat`,
-                      }).catch(() => {});
-                    }, 2500);
-                  }
-                }
-              }
-            }
-          } catch (err) {
-            console.error(`Error processing alarm ${alarm.id}:`, err);
-          }
-        }
-
-        return {
-          activeCount: alarms.length,
-          triggeredCount: passTriggered,
-          remainingCount: Math.max(0, alarms.length - passTriggered),
-        };
-      };
 
       // Pass 1 (at 0s of cron minute) — returns immediately so pg_net never times out
       const pass1 = await runAlarmCheckPass();

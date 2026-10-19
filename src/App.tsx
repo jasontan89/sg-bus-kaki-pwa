@@ -26,7 +26,6 @@ import {
 } from './services/pushManager';
 import {
   fetchBusArrivals,
-  deleteBusArrivalAlarm,
   fetchVapidPublicKey,
   registerPushSubscription,
 } from './services/api';
@@ -314,12 +313,9 @@ export const App: React.FC = () => {
         const etaMins = svc?.nextBus?.etaMinutes;
 
         if (etaMins !== null && etaMins !== undefined && etaMins <= alarm.lead_mins) {
-          // Remove from local storage first so it only triggers once
+          // Remove from local storage first so client only triggers once (server marks fired=true after sending FCM push)
           const alarmKey = alarm.id || `${alarm.bus_stop_code}_${alarm.service_no}`;
           removeStoredBusAlarm(alarmKey);
-          if (alarm.id) {
-            deleteBusArrivalAlarm(alarm.id, alarm.endpoint).catch(() => {});
-          }
 
           const title = `🚌 Bus ${alarm.service_no} Arriving!`;
           const body = `Bus ${alarm.service_no} is arriving ${
@@ -331,7 +327,7 @@ export const App: React.FC = () => {
             body,
             icon: '/icon-192.png',
             badge: '/icon-192.png',
-            tag: `bus-alarm-${alarmKey}`,
+            tag: `bus-alarm-${alarmKey}-${Date.now()}`,
             renotify: true,
             silent: false,
             forceCloudPush: true,
