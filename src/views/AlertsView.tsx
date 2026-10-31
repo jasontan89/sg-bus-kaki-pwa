@@ -94,7 +94,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
 
   useEffect(() => {
     setPermission(getNotificationPermission());
-    // Check local storage for saved lines
     try {
       const saved = localStorage.getItem('sg_mrt_lines');
       if (saved) setSelectedLines(JSON.parse(saved));
@@ -142,7 +141,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     setSelectedLines(updated);
     localStorage.setItem('sg_mrt_lines', JSON.stringify(updated));
 
-    // Update backend subscription if already active
     try {
       const vapidKey = await fetchVapidPublicKey();
       const sub = await subscribeToPush(vapidKey);
@@ -187,7 +185,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     startBackgroundAudioKeepAlive('Cloud Push Test');
     setTestingCloudPush(true);
     try {
-      // 1. Check permission
       const perm = await requestNotificationPermission();
       setPermission(perm);
       if (perm !== 'granted') {
@@ -195,7 +192,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         return;
       }
 
-      // 2. Refresh / rotate subscription with current active VAPID key
       const vapidKey = await fetchVapidPublicKey();
       const sub = await subscribeToPush(vapidKey);
       if (!sub) {
@@ -203,7 +199,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         return;
       }
 
-      // 3. Sync to Supabase
       const serialized = serializeSubscription(sub);
       await registerPushSubscription({
         ...serialized,
@@ -211,7 +206,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         alert_filter: alertFilter,
       });
 
-      // 4. Give user 4 seconds to background the PWA or lock their screen, then dispatch from Supabase!
       onShowToast('Switch out of PWA or lock your screen now! Cloud alert arriving in 4s...', 'info');
       await new Promise((resolve) => setTimeout(resolve, 4000));
 
@@ -238,7 +232,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
           Alerts & Web Push Hub
         </h2>
         <p className="text-xs text-slate-400">
-          Real-time arrival countdowns & MRT disruption push alerts
+          Real-time arrival countdowns, cloud background alight tracking & MRT alerts
         </p>
       </div>
 
@@ -257,7 +251,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         {/* 1. Alighting Alarm Card (If armed) */}
         {alightAlarm?.armed && (
           <div className="p-3.5 rounded-xl bg-gradient-to-r from-brand-blue/15 to-slate-900 border border-brand-sky/40 space-y-2.5">
-            <div className="flex items-start justify-between">
+            <div className="flex items-start justify-between gap-2">
               <div className="flex items-center space-x-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
                 <span className="text-xs font-bold uppercase tracking-wider text-brand-sky">
@@ -265,13 +259,23 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                 </span>
               </div>
               <span
-                className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
                   alightAlarm.isTriggered
                     ? 'bg-rose-950 text-rose-300 border border-rose-600 animate-pulse'
+                    : alightAlarm.cloudSynced
+                    ? 'bg-emerald-950/70 text-emerald-300 border border-emerald-600/50'
                     : 'bg-slate-900 text-slate-300 border border-slate-700'
                 }`}
               >
-                {alightAlarm.isTriggered ? '⏰ ALIGHT NOW!' : 'Tracking GPS'}
+                {alightAlarm.isTriggered
+                  ? '⏰ ALIGHT NOW!'
+                  : alightAlarm.cloudSynced
+                  ? alightAlarm.trackedServiceNo
+                    ? `☁️ Cloud Bus ${alightAlarm.trackedServiceNo}`
+                    : '☁️ Cloud Push Active'
+                  : alightAlarm.trackedServiceNo
+                  ? `🚌 Bus ${alightAlarm.trackedServiceNo} • GPS`
+                  : 'Tracking GPS'}
               </span>
             </div>
 
@@ -292,9 +296,16 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                   <strong className="text-white font-mono">
                     {formatDistance(alightAlarm.currentDistanceMeters)}
                   </strong>
+                  {alightAlarm.stopsRemaining !== null &&
+                    alightAlarm.stopsRemaining !== undefined &&
+                    alightAlarm.trackedServiceNo && (
+                      <span className="text-brand-sky font-semibold ml-1.5">
+                        ({alightAlarm.stopsRemaining} stops)
+                      </span>
+                    )}
                 </span>
                 <span className="text-[10px] text-slate-500">
-                  (Alert at &le;{alightAlarm.thresholdMeters}m)
+                  (Alert &le;{alightAlarm.thresholdMeters}m)
                 </span>
               </div>
             </div>
@@ -407,13 +418,12 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-300 flex items-start space-x-2">
           <Smartphone className="w-4 h-4 text-brand-sky shrink-0 mt-0.5" />
           <p className="leading-relaxed">
-            Uses W3C PushManager & VAPID cryptographic tokens. You will receive notifications even when phone is locked or screen is off.
+            Uses W3C PushManager & VAPID cryptographic tokens. Both Arrival Alerts and Alight Alerts wake your phone even when switching apps or with screen off.
           </p>
         </div>
 
         {/* Dual Test Action Buttons */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-          {/* Cloud Push Test */}
           <button
             onClick={handleTestServerPush}
             disabled={testingCloudPush}
@@ -428,7 +438,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
             <span>Test Cloud Push (Screen Off)</span>
           </button>
 
-          {/* Local Audio Chime & Notification Preview */}
           <button
             onClick={handleTestLocalNotification}
             className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-300 flex items-center justify-center space-x-1.5 active:scale-95 transition-all"
@@ -449,7 +458,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
           Get pushed immediately if your daily train lines experience track faults or breakdowns.
         </p>
 
-        {/* Lines Selector Grid */}
         <div className="grid grid-cols-2 gap-2">
           {MRT_LINE_OPTIONS.map((line) => {
             const isChecked = selectedLines.includes(line.code);
@@ -476,7 +484,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
           })}
         </div>
 
-        {/* Sensitivity Filter */}
         <div className="pt-2 border-t border-slate-800/80">
           <p className="text-xs font-semibold text-slate-300 mb-2">Alert Sensitivity:</p>
           <div className="grid grid-cols-2 gap-2">

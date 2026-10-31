@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BusStop, BusRouteStop, BusArrivalData } from '../types/transit';
+import { AlightArmContext, BusStop, BusRouteStop, BusArrivalData } from '../types/transit';
 import { searchBusStops, fetchBusRoute, fetchBusArrivals } from '../services/api';
 import { isFavorite, saveFavorite, removeFavorite } from '../services/offlineStorage';
 import { SEED_BUS_STOPS } from '../services/busStopsData';
@@ -10,7 +10,7 @@ import { Search, MapPin, Route as RouteIcon, Star, RefreshCw, X, ArrowUpDown, Be
 
 interface SearchViewProps {
   initialServiceNo?: string;
-  onArmAlightAlarm: (stop: BusStop) => void;
+  onArmAlightAlarm: (stop: BusStop, context?: AlightArmContext) => void;
   onShowToast: (text: string, type?: 'success' | 'error' | 'info') => void;
   onFavoritesChanged?: () => void;
 }
@@ -30,6 +30,9 @@ export const SearchView: React.FC<SearchViewProps> = ({
 
   // Selected stop modal / arrivals
   const [selectedStop, setSelectedStop] = useState<BusStop | null>(null);
+  const [selectedRouteContext, setSelectedRouteContext] = useState<AlightArmContext | undefined>(
+    undefined
+  );
   const [arrivals, setArrivals] = useState<BusArrivalData | null>(null);
   const [loadingArrivals, setLoadingArrivals] = useState(false);
   const [isFav, setIsFav] = useState(false);
@@ -39,7 +42,6 @@ export const SearchView: React.FC<SearchViewProps> = ({
     serviceNo: string;
   }>({ isOpen: false, serviceNo: '' });
 
-  // If initialServiceNo passed, automatically search route
   useEffect(() => {
     if (initialServiceNo) {
       setQuery(initialServiceNo);
@@ -47,7 +49,6 @@ export const SearchView: React.FC<SearchViewProps> = ({
     }
   }, [initialServiceNo]);
 
-  // Debounced search for stops
   useEffect(() => {
     const q = query.trim();
     if (!q) {
@@ -61,7 +62,6 @@ export const SearchView: React.FC<SearchViewProps> = ({
         const stops = await searchBusStops(q);
         setMatchingStops(stops);
 
-        // If query looks like a bus service number (e.g. 1-4 digits/letters like 65, 190, 857, 960e)
         if (/^[0-9]{1,3}[a-zA-Z]?$/.test(q)) {
           await handleSearchRoute(q, routeDirection);
         }
@@ -87,8 +87,9 @@ export const SearchView: React.FC<SearchViewProps> = ({
     }
   };
 
-  const handleSelectStop = async (stop: BusStop) => {
+  const handleSelectStop = async (stop: BusStop, routeCtx?: AlightArmContext) => {
     setSelectedStop(stop);
+    setSelectedRouteContext(routeCtx);
     setLoadingArrivals(true);
     try {
       const [favStatus, arrivalData] = await Promise.all([
@@ -136,6 +137,8 @@ export const SearchView: React.FC<SearchViewProps> = ({
       <div className="relative">
         <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 transform -translate-y-1/2" />
         <input
+          id="transit-search-input"
+          name="transit-search"
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -179,7 +182,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
             }`}
           >
             <RouteIcon className="w-3.5 h-3.5" />
-            <span>Bus {query} Route ({routeStops.length} stops)</span>
+            <span>Bus {routeStops[0].service_no || query} Route ({routeStops.length} stops)</span>
           </button>
         </div>
       )}
@@ -189,7 +192,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
         <div className="bg-brand-dark/95 border border-slate-800 rounded-2xl p-3 shadow-lg flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <span className="bg-brand-blue text-white font-extrabold text-xs px-2.5 py-0.5 rounded-lg">
-              Bus {query}
+              Bus {routeStops[0].service_no || query}
             </span>
             <span className="text-xs text-slate-300 font-semibold">
               Direction {routeDirection}
@@ -199,7 +202,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
             onClick={() => {
               const nextDir = routeDirection === 1 ? 2 : 1;
               setRouteDirection(nextDir);
-              handleSearchRoute(query, nextDir);
+              handleSearchRoute(routeStops[0].service_no || query, nextDir);
             }}
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-brand-sky text-xs font-bold hover:bg-slate-800 active:scale-95 transition-all"
           >
@@ -218,59 +221,71 @@ export const SearchView: React.FC<SearchViewProps> = ({
       ) : activeTab === 'route' && routeStops.length > 0 ? (
         /* Sequential Route Stops List */
         <div className="space-y-2">
-          {routeStops.map((rStop, idx) => (
-            <div
-              key={rStop.stop_sequence || idx}
-              onClick={() => {
-                const seed = SEED_BUS_STOPS.find((s) => s.bus_stop_code === rStop.bus_stop_code);
-                const lat = rStop.latitude || seed?.latitude || 1.2968;
-                const lon = rStop.longitude || seed?.longitude || 103.8525;
-                handleSelectStop({
-                  bus_stop_code: rStop.bus_stop_code,
-                  description: rStop.description || seed?.description || `Stop ${rStop.bus_stop_code}`,
-                  road_name: rStop.road_name || seed?.road_name || '',
-                  latitude: lat,
-                  longitude: lon,
-                });
-              }}
-              className="bg-brand-dark/80 hover:bg-brand-dark border border-slate-800 hover:border-slate-700 rounded-xl p-3 shadow-md flex items-center justify-between cursor-pointer transition-all"
-            >
-              <div className="flex items-center space-x-3 min-w-0">
-                <span className="w-6 h-6 rounded-full bg-slate-800 text-slate-400 font-mono text-[10px] font-bold flex items-center justify-center shrink-0">
-                  {rStop.stop_sequence}
-                </span>
-                <div className="min-w-0">
-                  <div className="flex items-center space-x-1.5">
-                    <span className="font-mono text-xs font-bold text-brand-sky">
-                      {rStop.bus_stop_code}
-                    </span>
-                    <h4 className="text-xs font-bold text-white truncate">
-                      {rStop.description || 'Bus Stop'}
-                    </h4>
-                  </div>
-                  <p className="text-[10px] text-slate-400 truncate">
-                    {rStop.road_name || `${rStop.distance} km`}
-                  </p>
-                </div>
-              </div>
+          {routeStops.map((rStop, idx) => {
+            const seed = SEED_BUS_STOPS.find((s) => s.bus_stop_code === rStop.bus_stop_code);
+            const lat = rStop.latitude || seed?.latitude || 1.2968;
+            const lon = rStop.longitude || seed?.longitude || 103.8525;
+            const resolvedStop: BusStop = {
+              bus_stop_code: rStop.bus_stop_code,
+              description: rStop.description || seed?.description || `Stop ${rStop.bus_stop_code}`,
+              road_name: rStop.road_name || seed?.road_name || '',
+              latitude: lat,
+              longitude: lon,
+            };
+            const routeCtx: AlightArmContext = {
+              serviceNo: rStop.service_no || query.trim(),
+              direction: routeDirection,
+            };
 
-              {/* Operating Hours & Street View */}
-              <div className="flex items-center space-x-2 shrink-0">
-                <StreetViewButton
-                  latitude={rStop.latitude || 0}
-                  longitude={rStop.longitude || 0}
-                  stopName={rStop.description || rStop.bus_stop_code}
-                  variant="icon"
-                  className="p-1 rounded-lg"
-                />
-                <div className="text-right text-[10px] font-mono text-slate-400">
-                  <span>{rStop.wd_first_bus || '05:30'}</span>
-                  <span className="mx-1 text-slate-600">-</span>
-                  <span>{rStop.wd_last_bus || '23:30'}</span>
+            return (
+              <div
+                key={rStop.stop_sequence || idx}
+                onClick={() => handleSelectStop(resolvedStop, routeCtx)}
+                className="bg-brand-dark/80 hover:bg-brand-dark border border-slate-800 hover:border-slate-700 rounded-xl p-3 shadow-md flex items-center justify-between cursor-pointer transition-all"
+              >
+                <div className="flex items-center space-x-3 min-w-0 pr-2">
+                  <span className="w-6 h-6 rounded-full bg-slate-800 text-slate-400 font-mono text-[10px] font-bold flex items-center justify-center shrink-0">
+                    {rStop.stop_sequence}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex items-center space-x-1.5">
+                      <span className="font-mono text-xs font-bold text-brand-sky">
+                        {rStop.bus_stop_code}
+                      </span>
+                      <h4 className="text-xs font-bold text-white truncate">
+                        {resolvedStop.description}
+                      </h4>
+                    </div>
+                    <p className="text-[10px] text-slate-400 truncate">
+                      {resolvedStop.road_name || `${rStop.distance} km`}
+                    </p>
+                  </div>
+                </div>
+
+                {/* 1-Tap Route-Locked Alight Button & Street View */}
+                <div className="flex items-center space-x-1.5 shrink-0">
+                  <StreetViewButton
+                    latitude={lat}
+                    longitude={lon}
+                    stopName={resolvedStop.description}
+                    variant="icon"
+                    className="p-1 rounded-lg"
+                  />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onArmAlightAlarm(resolvedStop, routeCtx);
+                    }}
+                    className="flex items-center space-x-1 px-2 py-1 rounded-lg bg-brand-sky/15 border border-brand-sky/30 text-brand-sky hover:bg-brand-sky/25 text-[11px] font-bold shrink-0 active:scale-95 transition-all"
+                    title={`Arm Alight Alert locked to Bus ${routeCtx.serviceNo}`}
+                  >
+                    <Bell className="w-3.5 h-3.5" />
+                    <span>Alight</span>
+                  </button>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : matchingStops.length > 0 ? (
         /* Bus Stop Search Results */
@@ -354,7 +369,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
                 />
                 <button
                   onClick={() => {
-                    onArmAlightAlarm(selectedStop);
+                    onArmAlightAlarm(selectedStop, selectedRouteContext);
                     setSelectedStop(null);
                   }}
                   className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-brand-sky/15 border border-brand-sky/40 text-brand-sky hover:bg-brand-sky/25 text-xs font-bold active:scale-95 transition-all"

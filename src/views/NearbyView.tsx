@@ -252,76 +252,85 @@ export const NearbyView: React.FC<NearbyViewProps> = ({
       {/* Selected Bus Stop Detail & Live Arrivals */}
       {selectedStop ? (
         <div className="bg-brand-dark/95 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
-          {/* Stop Header */}
-          <div className="flex items-start justify-between">
-            <div>
-              <div className="flex items-center space-x-2">
-                <span className="bg-brand-sky/20 border border-brand-sky/40 text-brand-sky font-mono font-black text-xs px-2 py-0.5 rounded-md">
-                  {selectedStop.bus_stop_code}
-                </span>
-                <h3 className="text-base font-black text-white">{selectedStop.description}</h3>
+          {/* Stop Header (Mobile-responsive 2-row layout preventing 390px overflow) */}
+          <div className="space-y-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="bg-brand-sky/20 border border-brand-sky/40 text-brand-sky font-mono font-black text-xs px-2 py-0.5 rounded-md shrink-0">
+                    {selectedStop.bus_stop_code}
+                  </span>
+                  <h3 className="text-base font-black text-white leading-tight truncate">
+                    {selectedStop.description}
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5 truncate">{selectedStop.road_name}</p>
               </div>
-              <p className="text-xs text-slate-400 mt-0.5">{selectedStop.road_name}</p>
+
+              {/* Pin & Refresh Icons */}
+              <div className="flex items-center space-x-1.5 shrink-0">
+                {/* Toggle Favorite */}
+                <button
+                  onClick={handleToggleFavorite}
+                  className={`p-2 rounded-xl border active:scale-95 transition-all ${
+                    isFav
+                      ? 'bg-amber-500/20 border-amber-500 text-amber-400'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                  }`}
+                  title="Save stop to Favorites"
+                >
+                  <Star className={`w-4 h-4 ${isFav ? 'fill-amber-400' : ''}`} />
+                </button>
+
+                {/* Refresh Arrivals */}
+                <button
+                  onClick={handleRefreshArrivals}
+                  disabled={loadingArrivals}
+                  className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-brand-sky text-brand-sky active:scale-95 transition-all"
+                  title="Refresh arrivals"
+                >
+                  <RefreshCw className={`w-4 h-4 ${loadingArrivals ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
             </div>
 
-            {/* Quick Actions Header */}
-            <div className="flex items-center space-x-1.5">
+            {/* Quick Actions Row */}
+            <div className="flex items-center justify-between gap-2">
               {/* Alighting Alarm Trigger */}
               <button
                 onClick={() => onArmAlightAlarm(selectedStop)}
-                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-brand-sky/15 border border-brand-sky/40 text-brand-sky hover:bg-brand-sky/25 active:scale-95 transition-all text-xs font-bold"
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-brand-sky/15 border border-brand-sky/40 text-brand-sky hover:bg-brand-sky/25 active:scale-95 transition-all text-xs font-bold whitespace-nowrap"
                 title="Arm Alighting Wake-up Alarm for this stop"
               >
-                <Bell className="w-3.5 h-3.5" />
+                <Bell className="w-3.5 h-3.5 shrink-0" />
                 <span>Alight Alert</span>
               </button>
 
-              {/* Street View Button */}
-              <StreetViewButton
-                latitude={selectedStop.latitude}
-                longitude={selectedStop.longitude}
-                stopName={selectedStop.description}
-                variant="icon"
-              />
+              <div className="flex items-center space-x-1.5 shrink-0">
+                {/* Street View Button */}
+                <StreetViewButton
+                  latitude={selectedStop.latitude}
+                  longitude={selectedStop.longitude}
+                  stopName={selectedStop.description}
+                  variant="icon"
+                />
 
-              {/* Service Filter */}
-              <button
-                onClick={() => setFilterModalOpen(true)}
-                className={`p-2 rounded-xl border active:scale-95 transition-all relative ${
-                  hiddenServices.length > 0
-                    ? 'bg-brand-sky/20 border-brand-sky text-brand-sky'
-                    : 'bg-slate-900 border-slate-800 hover:border-brand-sky text-slate-300'
-                }`}
-                title="Filter bus services"
-              >
-                <Filter className="w-4 h-4" />
-                {hiddenServices.length > 0 && (
-                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-brand-sky rounded-full" />
-                )}
-              </button>
-
-              {/* Toggle Favorite */}
-              <button
-                onClick={handleToggleFavorite}
-                className={`p-2 rounded-xl border active:scale-95 transition-all ${
-                  isFav
-                    ? 'bg-amber-500/20 border-amber-500 text-amber-400'
-                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                }`}
-                title="Save stop to Favorites"
-              >
-                <Star className={`w-4 h-4 ${isFav ? 'fill-amber-400' : ''}`} />
-              </button>
-
-              {/* Refresh Arrivals */}
-              <button
-                onClick={handleRefreshArrivals}
-                disabled={loadingArrivals}
-                className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-brand-sky text-brand-sky active:scale-95 transition-all"
-                title="Refresh arrivals"
-              >
-                <RefreshCw className={`w-4 h-4 ${loadingArrivals ? 'animate-spin' : ''}`} />
-              </button>
+                {/* Service Filter */}
+                <button
+                  onClick={() => setFilterModalOpen(true)}
+                  className={`p-2 rounded-xl border active:scale-95 transition-all relative ${
+                    hiddenServices.length > 0
+                      ? 'bg-brand-sky/20 border-brand-sky text-brand-sky'
+                      : 'bg-slate-900 border-slate-800 hover:border-brand-sky text-slate-300'
+                  }`}
+                  title="Filter bus services"
+                >
+                  <Filter className="w-4 h-4" />
+                  {hiddenServices.length > 0 && (
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-brand-sky rounded-full" />
+                  )}
+                </button>
+              </div>
             </div>
           </div>
 

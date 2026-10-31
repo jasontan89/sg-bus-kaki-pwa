@@ -187,7 +187,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                       </span>
                       {editingCode === fav.bus_stop_code ? (
                         <div
-                          className="flex items-center space-x-1"
+                          className="flex items-center space-x-1 shrink-0"
                           onClick={(e) => e.stopPropagation()}
                         >
                           <input
@@ -219,7 +219,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
 
                   {/* Actions & Chevron */}
                   <div
-                    className="flex items-center space-x-1"
+                    className="flex items-center space-x-1 shrink-0"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* Street View */}

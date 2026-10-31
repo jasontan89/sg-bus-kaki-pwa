@@ -24,7 +24,7 @@ registerRoute(
   })
 );
 
-// Cache SVG assets (like mrt_map.svg and bus mascot)
+// Cache SVG & image assets (like mrt_map.svg and bus mascot)
 registerRoute(
   ({ request }) => request.destination === 'image',
   new StaleWhileRevalidate({
@@ -38,28 +38,64 @@ registerRoute(
   })
 );
 
-// Handle Web Push event for native Android notifications
+const SW_API_BASE = 'https://blcsjvifiytbznwesmyx.supabase.co/functions/v1/pwa_api';
+let swActiveAlarms: any[] = [];
+let swActiveAlightAlarm: any | null = null;
+let swMonitorRunning = false;
+
+// Handle Web Push event for native Android / iOS notifications
 self.addEventListener('push', (event) => {
   if (!event.data) return;
 
   try {
     const data = event.data.json();
-    const title = data.title || '🚌 Bus Kaki Alert';
+    const payloadData = data.data || {};
+    const payloadType = payloadData.type || data.type || 'BUS_ALARM';
+    const isAlightAlarm = payloadType === 'ALIGHT_ALARM';
+    const isAlightPreAlert = payloadType === 'ALIGHT_PRE_ALERT';
+
+    const title =
+      data.title || (isAlightAlarm ? '⏰ ALIGHT NOW!' : '🚌 Bus Kaki Alert');
+
+    const actions =
+      isAlightAlarm || isAlightPreAlert
+        ? [
+            { action: 'alighted', title: '✅ I Have Alighted' },
+            { action: 'open', title: 'Open Ride HUD' },
+          ]
+        : [
+            { action: 'open', title: 'Open Bus Kaki' },
+            { action: 'dismiss', title: 'Dismiss' },
+          ];
+
+    const vibrate = isAlightAlarm
+      ? [800, 250, 800, 250, 1200, 250, 1200]
+      : isAlightPreAlert
+      ? [350, 150, 350]
+      : [500, 200, 500, 200, 1000];
+
     const options: any = {
-      body: data.body || 'Your bus is arriving soon!',
+      body: data.body || 'Your bus alert has triggered!',
       icon: data.icon && !data.icon.endsWith('.svg') ? data.icon : '/icon-192.png',
       badge: data.badge && !data.badge.endsWith('.svg') ? data.badge : '/icon-192.png',
-      tag: data.tag || 'bus-kaki-notification',
+      tag: data.tag || (isAlightAlarm ? 'alight-now-alert' : 'bus-kaki-notification'),
       renotify: true,
       silent: false,
-      data: data.data || {},
-      vibrate: [500, 200, 500, 200, 1000],
+      data: payloadData,
+      vibrate,
       requireInteraction: true,
-      actions: [
-        { action: 'open', title: 'Open Bus Kaki' },
-        { action: 'dismiss', title: 'Dismiss' },
-      ],
+      actions,
     };
+
+    if (isAlightAlarm) {
+      swActiveAlightAlarm = null;
+    }
+
+    const clientMessageType = isAlightAlarm
+      ? 'PUSH_ALIGHT_TRIGGERED'
+      : isAlightPreAlert
+      ? 'PUSH_ALIGHT_PRE_ALERT'
+      : 'PUSH_ALARM_TRIGGERED';
 
     event.waitUntil(
       Promise.all([
@@ -69,7 +105,7 @@ self.addEventListener('push', (event) => {
           .then((clientList) => {
             for (const client of clientList) {
               client.postMessage({
-                type: 'PUSH_ALARM_TRIGGERED',
+                type: clientMessageType,
                 title,
                 body: options.body,
                 tag: options.tag,
@@ -85,17 +121,14 @@ self.addEventListener('push', (event) => {
   }
 });
 
-const SW_API_BASE = 'https://blcsjvifiytbznwesmyx.supabase.co/functions/v1/pwa_api';
-let swActiveAlarms: any[] = [];
-let swMonitorRunning = false;
-
 async function runSwAlarmMonitorLoop() {
   if (swMonitorRunning) return;
   swMonitorRunning = true;
 
   try {
-    // Poll every 15s while active alarms remain
-    while (swActiveAlarms.length > 0) {
+    // Poll every 15s while active arrival or alighting alarms remain in warm SW memory
+    while (swActiveAlarms.length > 0 || swActiveAlightAlarm !== null) {
+      // 1. Check Bus Arrival Alarms
       for (const alarm of [...swActiveAlarms]) {
         try {
           const res = await fetch(
@@ -110,7 +143,6 @@ async function runSwAlarmMonitorLoop() {
             const etaMins = svc?.nextBus?.etaMinutes;
 
             if (etaMins !== null && etaMins !== undefined && etaMins <= alarm.lead_mins) {
-              // Remove from SW active list so it only fires once
               swActiveAlarms = swActiveAlarms.filter((a) => a.id !== alarm.id);
 
               const title = `🚌 Bus ${alarm.service_no} Arriving!`;
@@ -157,7 +189,83 @@ async function runSwAlarmMonitorLoop() {
         }
       }
 
-      if (swActiveAlarms.length === 0) break;
+      // 2. Backup Check for Active Cloud Alight Alarm while SW stays warm
+      if (swActiveAlightAlarm && !swActiveAlightAlarm.isTriggered) {
+        try {
+          const currentAlight = swActiveAlightAlarm;
+          const params = new URLSearchParams();
+          if (currentAlight.serverAlarmId) {
+            params.set('id', String(currentAlight.serverAlarmId));
+          }
+          if (currentAlight.endpoint) {
+            params.set('endpoint', String(currentAlight.endpoint));
+          }
+          if (params.toString()) {
+            const res = await fetch(`${SW_API_BASE}/api/alight-alarm/status?${params.toString()}`);
+            if (res.ok) {
+              const json = await res.json();
+              const srv = json.alarm;
+              if (!srv) {
+                swActiveAlightAlarm = null;
+              } else if (
+                srv.fired ||
+                (srv.estimated_distance_meters !== null &&
+                  srv.estimated_distance_meters <= srv.threshold_meters)
+              ) {
+                swActiveAlightAlarm = null;
+                const stopLabel = srv.target_stop_name || currentAlight.stopName || srv.target_stop_code;
+                const distVal = srv.estimated_distance_meters ?? srv.threshold_meters;
+                const title = `⏰ ALIGHT NOW: ${stopLabel}`;
+                const body = srv.service_no
+                  ? `Bus ${srv.service_no} is ~${distVal}m from ${stopLabel}! Prepare to alight now.`
+                  : `Approaching ${stopLabel} (~${distVal}m)! Prepare to alight now.`;
+                const alightData = {
+                  type: 'ALIGHT_ALARM',
+                  alarmId: srv.id,
+                  stopCode: srv.target_stop_code,
+                  stopName: stopLabel,
+                  distanceMeters: distVal,
+                  url: `/?alight=hud&stop=${encodeURIComponent(srv.target_stop_code)}`,
+                };
+
+                await self.registration.showNotification(title, {
+                  body,
+                  icon: '/icon-192.png',
+                  badge: '/icon-192.png',
+                  tag: `alight-now-${srv.id}-sw`,
+                  renotify: true,
+                  silent: false,
+                  requireInteraction: true,
+                  vibrate: [800, 250, 800, 250, 1200, 250, 1200],
+                  actions: [
+                    { action: 'alighted', title: '✅ I Have Alighted' },
+                    { action: 'open', title: 'Open Ride HUD' },
+                  ],
+                  data: alightData,
+                } as any);
+
+                const clientList = await self.clients.matchAll({
+                  type: 'window',
+                  includeUncontrolled: true,
+                });
+                for (const client of clientList) {
+                  client.postMessage({
+                    type: 'PUSH_ALIGHT_TRIGGERED',
+                    title,
+                    body,
+                    tag: `alight-now-${srv.id}-sw`,
+                    data: alightData,
+                  });
+                }
+              }
+            }
+          }
+        } catch {
+          // Ignore transient fetch errors
+        }
+      }
+
+      if (swActiveAlarms.length === 0 && swActiveAlightAlarm === null) break;
       await new Promise((resolve) => setTimeout(resolve, 15000));
     }
   } finally {
@@ -186,21 +294,70 @@ self.addEventListener('message', (event) => {
     }
   } else if (event.data.type === 'SYNC_BUS_ALARMS') {
     swActiveAlarms = Array.isArray(event.data.alarms) ? event.data.alarms : [];
-    if (swActiveAlarms.length > 0 && !swMonitorRunning) {
+    if ((swActiveAlarms.length > 0 || swActiveAlightAlarm !== null) && !swMonitorRunning) {
+      event.waitUntil(runSwAlarmMonitorLoop());
+    }
+  } else if (event.data.type === 'SYNC_ALIGHT_ALARM') {
+    swActiveAlightAlarm = event.data.alarm && event.data.alarm.armed ? event.data.alarm : null;
+    if ((swActiveAlarms.length > 0 || swActiveAlightAlarm !== null) && !swMonitorRunning) {
       event.waitUntil(runSwAlarmMonitorLoop());
     }
   }
 });
 
-// Handle notification tap / click
+// Handle notification tap / lock-screen actions
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const notifData = event.notification.data || {};
+
+  // 1-Tap Lock-Screen "I Have Alighted" Action: cancel server pulses & clear client alarm immediately
+  if (event.action === 'alighted') {
+    swActiveAlightAlarm = null;
+    event.waitUntil(
+      (async () => {
+        try {
+          const allNotes = await self.registration.getNotifications();
+          for (const n of allNotes) {
+            if (n.tag && n.tag.startsWith('alight-')) {
+              n.close();
+            }
+          }
+        } catch {}
+
+        try {
+          const sub = await self.registration.pushManager.getSubscription();
+          await fetch(`${SW_API_BASE}/api/alight-alarm/cancel`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              alarmId: notifData.alarmId || null,
+              endpoint: sub?.endpoint || null,
+            }),
+          });
+        } catch {}
+
+        try {
+          const clientList = await self.clients.matchAll({
+            type: 'window',
+            includeUncontrolled: true,
+          });
+          for (const client of clientList) {
+            client.postMessage({
+              type: 'ALIGHT_ALARM_DISMISSED',
+              alarmId: notifData.alarmId || null,
+            });
+          }
+        } catch {}
+      })()
+    );
+    return;
+  }
 
   if (event.action === 'dismiss') {
     return;
   }
 
-  let targetUrl = (event.notification.data && event.notification.data.url) || '/';
+  let targetUrl = notifData.url || '/';
 
   // Prevent Open Redirect / Phishing: Ensure targetUrl is strictly a safe relative path
   if (

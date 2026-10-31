@@ -85,8 +85,17 @@ export interface BusArrivalAlarm {
   created_at?: string;
 }
 
+export type AlightTrackingMode = 'bus_locked' | 'auto_detect' | 'mrt' | 'trajectory_eta';
+
+export interface AlightArmContext {
+  serviceNo?: string;
+  direction?: number;
+}
+
 export interface AlightingAlarmState {
   armed: boolean;
+  serverAlarmId?: number | null;
+  endpoint?: string;
   stopCode: string;
   stopName: string;
   roadName: string;
@@ -94,8 +103,38 @@ export interface AlightingAlarmState {
   targetLon: number;
   thresholdMeters: number; // default 500m
   currentDistanceMeters: number | null;
+  initialDistanceMeters?: number | null;
   isTriggered: boolean;
   keepScreenAwake: boolean;
+  earbudsNapMode?: boolean;
+  trackingMode?: AlightTrackingMode;
+  trackedServiceNo?: string | null;
+  trackedDirection?: number | null;
+  stopsRemaining?: number | null;
+  candidateServices?: string[];
+  cloudSynced?: boolean;
+}
+
+export interface ServerAlightAlarmRecord {
+  id: number;
+  endpoint: string;
+  target_stop_code: string;
+  target_stop_name: string | null;
+  road_name: string | null;
+  target_lat: number;
+  target_lon: number;
+  threshold_meters: number;
+  tracking_mode: AlightTrackingMode;
+  service_no: string | null;
+  direction: number | null;
+  boarding_stop_seq: number | null;
+  tracked_stop_seq: number | null;
+  target_stop_seq: number | null;
+  stops_remaining: number | null;
+  estimated_distance_meters: number | null;
+  candidate_services: string[] | null;
+  fired: boolean;
+  updated_at: string;
 }
 
 export interface FavoriteStop {

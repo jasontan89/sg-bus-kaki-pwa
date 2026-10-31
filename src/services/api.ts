@@ -1,4 +1,11 @@
-import { BusArrivalData, BusRouteStop, BusStop, MRTAlert } from '../types/transit';
+import {
+  AlightTrackingMode,
+  BusArrivalData,
+  BusRouteStop,
+  BusStop,
+  MRTAlert,
+  ServerAlightAlarmRecord,
+} from '../types/transit';
 import { searchOfflineBusStops } from './offlineStorage';
 import { calculateHaversineDistanceMeters } from './alarmManager';
 import { SEED_BUS_STOPS } from './busStopsData';
@@ -67,7 +74,6 @@ export async function fetchNearbyStops(
     console.warn('API nearby error, calculating offline from pre-seeded bus stops:', err);
   }
 
-  // Resilient Offline Fallback: Compute distances from pre-seeded stops catalog
   const stopsWithDist = SEED_BUS_STOPS.map((s) => ({
     ...s,
     distance: calculateHaversineDistanceMeters(lat, lon, s.latitude, s.longitude) ?? undefined,
@@ -84,7 +90,6 @@ export async function searchBusStops(query: string): Promise<BusStop[]> {
   const cleanQ = query.trim();
   if (!cleanQ) return [];
 
-  // Try API first
   try {
     const res = await fetch(
       `${BASE_API_URL}/api/bus-search?q=${encodeURIComponent(cleanQ)}`,
@@ -219,6 +224,107 @@ export async function deleteBusArrivalAlarm(
     const res = await fetch(url, {
       method: 'DELETE',
       headers: defaultHeaders,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Arm a Cloud Alighting Alarm in Supabase for background / screen-off live bus GPS & trajectory tracking
+ */
+export async function createCloudAlightAlarm(payload: {
+  endpoint: string;
+  keys?: { p256dh: string; auth: string };
+  targetStopCode: string;
+  targetStopName: string;
+  roadName?: string;
+  targetLat: number;
+  targetLon: number;
+  thresholdMeters?: number;
+  trackingMode?: AlightTrackingMode;
+  serviceNo?: string | null;
+  direction?: number | null;
+  userLat?: number | null;
+  userLon?: number | null;
+  userSpeedMps?: number | null;
+}): Promise<{ ok: boolean; alarm?: ServerAlightAlarmRecord }> {
+  const res = await fetch(`${BASE_API_URL}/api/alight-alarm`, {
+    method: 'POST',
+    headers: defaultHeaders,
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Failed to arm cloud alight alarm (${res.status})`);
+  return await res.json();
+}
+
+/**
+ * Send foreground GPS/speed heartbeat, mode/bus override, or visibilitychange->hidden keepalive sync
+ */
+export async function sendAlightHeartbeat(
+  payload: {
+    alarmId?: number | null;
+    endpoint?: string;
+    userLat?: number | null;
+    userLon?: number | null;
+    userSpeedMps?: number | null;
+    thresholdMeters?: number;
+    overrideMode?: AlightTrackingMode;
+    overrideServiceNo?: string | null;
+    overrideDirection?: number | null;
+  },
+  useKeepalive = false
+): Promise<{ ok: boolean; expired?: boolean; alarm?: ServerAlightAlarmRecord | null }> {
+  try {
+    const res = await fetch(`${BASE_API_URL}/api/alight-alarm/heartbeat`, {
+      method: 'POST',
+      headers: defaultHeaders,
+      body: JSON.stringify(payload),
+      keepalive: useKeepalive,
+    });
+    if (!res.ok) return { ok: false };
+    return await res.json();
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * Fetch active Cloud Alighting Alarm status when returning to PWA from background
+ */
+export async function fetchAlightAlarmStatus(
+  endpoint?: string,
+  alarmId?: number | null
+): Promise<{ ok: boolean; alarm: ServerAlightAlarmRecord | null }> {
+  try {
+    const params = new URLSearchParams();
+    if (alarmId) params.set('id', String(alarmId));
+    if (endpoint) params.set('endpoint', endpoint);
+    const res = await fetch(`${BASE_API_URL}/api/alight-alarm/status?${params.toString()}`, {
+      headers: defaultHeaders,
+    });
+    if (!res.ok) return { ok: false, alarm: null };
+    const data = await res.json();
+    return { ok: true, alarm: data.alarm || null };
+  } catch {
+    return { ok: false, alarm: null };
+  }
+}
+
+/**
+ * Cancel / delete active Cloud Alighting Alarm
+ */
+export async function deleteCloudAlightAlarm(
+  alarmId?: number | null,
+  endpoint?: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE_API_URL}/api/alight-alarm/cancel`, {
+      method: 'POST',
+      headers: defaultHeaders,
+      body: JSON.stringify({ alarmId, endpoint }),
+      keepalive: true,
     });
     return res.ok;
   } catch {
