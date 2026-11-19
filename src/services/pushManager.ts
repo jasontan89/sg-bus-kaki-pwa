@@ -132,35 +132,42 @@ export async function unsubscribeFromPush(): Promise<boolean> {
 }
 
 /**
- * Serializes subscription keys to base64 for backend storage
+ * Serializes subscription keys using W3C standard toJSON() base64url format for backend storage
  */
 export function serializeSubscription(subscription: PushSubscription) {
+  const json = typeof subscription.toJSON === 'function' ? subscription.toJSON() : null;
+  if (json && json.keys && json.keys.p256dh && json.keys.auth) {
+    return {
+      endpoint: subscription.endpoint,
+      keys: {
+        p256dh: json.keys.p256dh,
+        auth: json.keys.auth,
+      },
+    };
+  }
+
   const rawKey = subscription.getKey ? subscription.getKey('p256dh') : null;
   const rawAuth = subscription.getKey ? subscription.getKey('auth') : null;
 
-  const p256dh = rawKey
-    ? btoa(String.fromCharCode(...new Uint8Array(rawKey)))
-    : '';
-  const auth = rawAuth
-    ? btoa(String.fromCharCode(...new Uint8Array(rawAuth)))
-    : '';
+  const toBase64Url = (buf: ArrayBuffer | null) => {
+    if (!buf) return '';
+    return btoa(String.fromCharCode(...new Uint8Array(buf)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+  };
 
   return {
     endpoint: subscription.endpoint,
     keys: {
-      p256dh,
-      auth,
+      p256dh: toBase64Url(rawKey),
+      auth: toBase64Url(rawAuth),
     },
   };
 }
 
 /**
  * Dispatches a native OS notification with guaranteed sound and lock-screen delivery on Android.
- * Uses:
- * 1. ServiceWorkerRegistration.showNotification() with renotify: true, silent: false, and PNG icons
- * 2. Service Worker postMessage ('SHOW_NOTIFICATION') for backgrounded page execution
- * 3. High-urgency Google FCM Web Push relay when the PWA is in the background so Android OEM skins
- *    (Samsung OneUI, Xiaomi HyperOS, Oppo ColorOS) wake the notification channel with full system sound.
  */
 export async function dispatchNativeNotification(
   title: string,
@@ -240,7 +247,7 @@ export async function dispatchNativeNotification(
     }
   }
 
-  // Also relay via high-urgency FCM Web Push when PWA is in background so Android OS plays system notification sound
+  // Also relay via high-urgency FCM Web Push when PWA is in background
   if (
     typeof document !== 'undefined' &&
     (document.visibilityState === 'hidden' || options.forceCloudPush)
@@ -248,7 +255,9 @@ export async function dispatchNativeNotification(
     getCurrentSubscription()
       .then((sub) => {
         if (sub && sub.endpoint) {
-          sendTestPushNotification(sub.endpoint, {
+          const serialized = serializeSubscription(sub);
+          sendTestPushNotification(serialized.endpoint, {
+            keys: serialized.keys,
             title,
             body: defaultOptions.body || '',
             tag: defaultOptions.tag,

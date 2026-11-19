@@ -36,7 +36,6 @@ import {
 import {
   fetchBusArrivals,
   fetchVapidPublicKey,
-  registerPushSubscription,
   createCloudAlightAlarm,
   sendAlightHeartbeat,
   fetchAlightAlarmStatus,
@@ -224,13 +223,16 @@ export const App: React.FC = () => {
       const vapidKey = await fetchVapidPublicKey();
       const sub = await subscribeToPush(vapidKey);
       if (!sub) {
+        if (showSuccessToast) {
+          showToast('Push notifications not supported or blocked on this browser.', 'error');
+        }
         return false;
       }
 
       const serialized = serializeSubscription(sub);
-      await registerPushSubscription(serialized);
-
       const coords = lastValidCoordsRef.current;
+
+      // Single fast keepalive request (server atomically upserts push subscription keys + alarm row)
       const res = await createCloudAlightAlarm({
         endpoint: serialized.endpoint,
         keys: serialized.keys,
@@ -265,8 +267,14 @@ export const App: React.FC = () => {
         }
         return true;
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Cloud alight registration notice:', err);
+      if (showSuccessToast) {
+        showToast(
+          `Cloud push sync failed: ${err?.message || 'Allow notifications to get screen-off alerts.'}`,
+          'error'
+        );
+      }
     } finally {
       syncingCloudArmRef.current = false;
     }
@@ -545,7 +553,10 @@ export const App: React.FC = () => {
   };
 
   // Client-side foreground monitor for active Bus Arrival Alarms
+  // (Only runs while app is visible so background delivery relies cleanly on Supabase Cloud Push)
   const checkActiveBusAlarms = async () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+
     const now = Date.now();
     if (now - lastBusAlarmCheckRef.current < 12000) return;
     lastBusAlarmCheckRef.current = now;

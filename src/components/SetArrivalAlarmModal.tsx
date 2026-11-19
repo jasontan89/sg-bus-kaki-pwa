@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Bell, X, Check, Smartphone, AlertCircle } from 'lucide-react';
 import { subscribeToPush, serializeSubscription, getNotificationPermission } from '../services/pushManager';
-import { createBusArrivalAlarm, registerPushSubscription, fetchVapidPublicKey } from '../services/api';
+import { createBusArrivalAlarm, fetchVapidPublicKey } from '../services/api';
 import { saveStoredBusAlarm } from '../services/alarmStorage';
 import { unlockAudio, startBackgroundAudioKeepAlive } from '../services/alarmManager';
 
@@ -30,27 +30,22 @@ export const SetArrivalAlarmModal: React.FC<SetArrivalAlarmModalProps> = ({
   if (!isOpen) return null;
 
   const handleArmAlarm = async () => {
-    // Unlock Web Audio & HTML5 Audio during direct user tap gesture so background chime can play
     unlockAudio();
     startBackgroundAudioKeepAlive(`Bus ${serviceNo} @ ${busStopName}`);
     setLoading(true);
     try {
-      // 1. Fetch public key
+      // 1. Fetch VAPID public key & ensure device has an active Web Push subscription
       const publicKey = await fetchVapidPublicKey();
-
-      // 2. Subscribe user via PushManager
       const subscription = await subscribeToPush(publicKey);
       if (!subscription) {
         throw new Error('Please allow notification permission to receive arrival alerts');
       }
 
-      // 3. Save subscription to backend
+      // 2. Atomically upsert push subscription keys + schedule bus arrival alarm in 1 fast keepalive request
       const serialized = serializeSubscription(subscription);
-      await registerPushSubscription(serialized);
-
-      // 4. Arm alarm in backend
       const res = await createBusArrivalAlarm({
-        endpoint: subscription.endpoint,
+        endpoint: serialized.endpoint,
+        keys: serialized.keys,
         busStopCode,
         busStopName,
         serviceNo,
@@ -60,7 +55,7 @@ export const SetArrivalAlarmModal: React.FC<SetArrivalAlarmModalProps> = ({
       // Save locally to display in Active Alerts list
       saveStoredBusAlarm({
         id: res?.alarmId || `${busStopCode}_${serviceNo}_${Date.now()}`,
-        endpoint: subscription.endpoint,
+        endpoint: serialized.endpoint,
         bus_stop_code: busStopCode,
         bus_stop_name: busStopName,
         service_no: serviceNo,
@@ -68,7 +63,7 @@ export const SetArrivalAlarmModal: React.FC<SetArrivalAlarmModalProps> = ({
         created_at: new Date().toISOString(),
       });
 
-      onSuccess(`Alert set! You will be notified when Bus ${serviceNo} is ${leadMins} mins away.`);
+      onSuccess(`☁️ Cloud alert armed! You will be notified when Bus ${serviceNo} is ${leadMins} mins away.`);
       onClose();
     } catch (err: any) {
       console.error('Error setting arrival alarm:', err);
@@ -129,7 +124,7 @@ export const SetArrivalAlarmModal: React.FC<SetArrivalAlarmModalProps> = ({
         <div className="mb-4 p-2.5 rounded-xl bg-brand-blue/10 border border-brand-blue/30 flex items-start space-x-2">
           <Smartphone className="w-4 h-4 text-brand-sky shrink-0 mt-0.5" />
           <p className="text-[11px] text-slate-300 leading-tight">
-            Delivers a native Android notification even if your screen is locked or browser is closed.
+            Delivers a native Android cloud notification even if your screen is locked or you switch apps.
           </p>
         </div>
 

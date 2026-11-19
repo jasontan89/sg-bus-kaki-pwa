@@ -39,241 +39,144 @@ registerRoute(
 );
 
 const SW_API_BASE = 'https://blcsjvifiytbznwesmyx.supabase.co/functions/v1/pwa_api';
-let swActiveAlarms: any[] = [];
-let swActiveAlightAlarm: any | null = null;
-let swMonitorRunning = false;
+const FALLBACK_VAPID_PUBLIC_KEY =
+  'BHSw8VkpCSgUdC1_XRhHMvLMdm7w-VhRH_tahYM2ZXOBAhQ2A80SPwEvakojni6fs7gT3R_ke7ZKspb6w79rBw8';
 
-// Handle Web Push event for native Android / iOS notifications
-self.addEventListener('push', (event) => {
-  if (!event.data) return;
-
-  try {
-    const data = event.data.json();
-    const payloadData = data.data || {};
-    const payloadType = payloadData.type || data.type || 'BUS_ALARM';
-    const isAlightAlarm = payloadType === 'ALIGHT_ALARM';
-    const isAlightPreAlert = payloadType === 'ALIGHT_PRE_ALERT';
-
-    const title =
-      data.title || (isAlightAlarm ? '⏰ ALIGHT NOW!' : '🚌 Bus Kaki Alert');
-
-    const actions =
-      isAlightAlarm || isAlightPreAlert
-        ? [
-            { action: 'alighted', title: '✅ I Have Alighted' },
-            { action: 'open', title: 'Open Ride HUD' },
-          ]
-        : [
-            { action: 'open', title: 'Open Bus Kaki' },
-            { action: 'dismiss', title: 'Dismiss' },
-          ];
-
-    const vibrate = isAlightAlarm
-      ? [800, 250, 800, 250, 1200, 250, 1200]
-      : isAlightPreAlert
-      ? [350, 150, 350]
-      : [500, 200, 500, 200, 1000];
-
-    const options: any = {
-      body: data.body || 'Your bus alert has triggered!',
-      icon: data.icon && !data.icon.endsWith('.svg') ? data.icon : '/icon-192.png',
-      badge: data.badge && !data.badge.endsWith('.svg') ? data.badge : '/icon-192.png',
-      tag: data.tag || (isAlightAlarm ? 'alight-now-alert' : 'bus-kaki-notification'),
-      renotify: true,
-      silent: false,
-      data: payloadData,
-      vibrate,
-      requireInteraction: true,
-      actions,
-    };
-
-    if (isAlightAlarm) {
-      swActiveAlightAlarm = null;
-    }
-
-    const clientMessageType = isAlightAlarm
-      ? 'PUSH_ALIGHT_TRIGGERED'
-      : isAlightPreAlert
-      ? 'PUSH_ALIGHT_PRE_ALERT'
-      : 'PUSH_ALARM_TRIGGERED';
-
-    event.waitUntil(
-      Promise.all([
-        self.registration.showNotification(title, options as any),
-        self.clients
-          .matchAll({ type: 'window', includeUncontrolled: true })
-          .then((clientList) => {
-            for (const client of clientList) {
-              client.postMessage({
-                type: clientMessageType,
-                title,
-                body: options.body,
-                tag: options.tag,
-                data: options.data,
-              });
-            }
-          })
-          .catch(() => {}),
-      ])
-    );
-  } catch (err) {
-    console.error('Error handling push event:', err);
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
   }
-});
-
-async function runSwAlarmMonitorLoop() {
-  if (swMonitorRunning) return;
-  swMonitorRunning = true;
-
-  try {
-    // Poll every 15s while active arrival or alighting alarms remain in warm SW memory
-    while (swActiveAlarms.length > 0 || swActiveAlightAlarm !== null) {
-      // 1. Check Bus Arrival Alarms
-      for (const alarm of [...swActiveAlarms]) {
-        try {
-          const res = await fetch(
-            `${SW_API_BASE}/bus-arrivals?stop=${encodeURIComponent(alarm.bus_stop_code)}`
-          );
-          if (res.ok) {
-            const data = await res.json();
-            const svc = (data.services || []).find(
-              (s: any) =>
-                String(s.serviceNo).toLowerCase() === String(alarm.service_no).toLowerCase()
-            );
-            const etaMins = svc?.nextBus?.etaMinutes;
-
-            if (etaMins !== null && etaMins !== undefined && etaMins <= alarm.lead_mins) {
-              swActiveAlarms = swActiveAlarms.filter((a) => a.id !== alarm.id);
-
-              const title = `🚌 Bus ${alarm.service_no} Arriving!`;
-              const body = `Bus ${alarm.service_no} is arriving ${
-                etaMins <= 0 ? 'now' : `in ${etaMins} mins`
-              } at ${alarm.bus_stop_name || alarm.bus_stop_code}!`;
-              const tag = `bus-alarm-${alarm.id || `${alarm.bus_stop_code}_${alarm.service_no}`}`;
-              const alarmData = {
-                alarmId: alarm.id,
-                stopCode: alarm.bus_stop_code,
-                serviceNo: alarm.service_no,
-                url: `/?stop=${alarm.bus_stop_code}`,
-              };
-
-              await self.registration.showNotification(title, {
-                body,
-                icon: '/icon-192.png',
-                badge: '/icon-192.png',
-                tag,
-                renotify: true,
-                silent: false,
-                requireInteraction: true,
-                vibrate: [500, 250, 500, 250, 1000],
-                data: alarmData,
-              } as any);
-
-              const clientList = await self.clients.matchAll({
-                type: 'window',
-                includeUncontrolled: true,
-              });
-              for (const client of clientList) {
-                client.postMessage({
-                  type: 'PUSH_ALARM_TRIGGERED',
-                  title,
-                  body,
-                  tag,
-                  data: alarmData,
-                });
-              }
-            }
-          }
-        } catch {
-          // Ignore transient fetch errors
-        }
-      }
-
-      // 2. Backup Check for Active Cloud Alight Alarm while SW stays warm
-      if (swActiveAlightAlarm && !swActiveAlightAlarm.isTriggered) {
-        try {
-          const currentAlight = swActiveAlightAlarm;
-          const params = new URLSearchParams();
-          if (currentAlight.serverAlarmId) {
-            params.set('id', String(currentAlight.serverAlarmId));
-          }
-          if (currentAlight.endpoint) {
-            params.set('endpoint', String(currentAlight.endpoint));
-          }
-          if (params.toString()) {
-            const res = await fetch(`${SW_API_BASE}/api/alight-alarm/status?${params.toString()}`);
-            if (res.ok) {
-              const json = await res.json();
-              const srv = json.alarm;
-              if (!srv) {
-                swActiveAlightAlarm = null;
-              } else if (
-                srv.fired ||
-                (srv.estimated_distance_meters !== null &&
-                  srv.estimated_distance_meters <= srv.threshold_meters)
-              ) {
-                swActiveAlightAlarm = null;
-                const stopLabel = srv.target_stop_name || currentAlight.stopName || srv.target_stop_code;
-                const distVal = srv.estimated_distance_meters ?? srv.threshold_meters;
-                const title = `⏰ ALIGHT NOW: ${stopLabel}`;
-                const body = srv.service_no
-                  ? `Bus ${srv.service_no} is ~${distVal}m from ${stopLabel}! Prepare to alight now.`
-                  : `Approaching ${stopLabel} (~${distVal}m)! Prepare to alight now.`;
-                const alightData = {
-                  type: 'ALIGHT_ALARM',
-                  alarmId: srv.id,
-                  stopCode: srv.target_stop_code,
-                  stopName: stopLabel,
-                  distanceMeters: distVal,
-                  url: `/?alight=hud&stop=${encodeURIComponent(srv.target_stop_code)}`,
-                };
-
-                await self.registration.showNotification(title, {
-                  body,
-                  icon: '/icon-192.png',
-                  badge: '/icon-192.png',
-                  tag: `alight-now-${srv.id}-sw`,
-                  renotify: true,
-                  silent: false,
-                  requireInteraction: true,
-                  vibrate: [800, 250, 800, 250, 1200, 250, 1200],
-                  actions: [
-                    { action: 'alighted', title: '✅ I Have Alighted' },
-                    { action: 'open', title: 'Open Ride HUD' },
-                  ],
-                  data: alightData,
-                } as any);
-
-                const clientList = await self.clients.matchAll({
-                  type: 'window',
-                  includeUncontrolled: true,
-                });
-                for (const client of clientList) {
-                  client.postMessage({
-                    type: 'PUSH_ALIGHT_TRIGGERED',
-                    title,
-                    body,
-                    tag: `alight-now-${srv.id}-sw`,
-                    data: alightData,
-                  });
-                }
-              }
-            }
-          }
-        } catch {
-          // Ignore transient fetch errors
-        }
-      }
-
-      if (swActiveAlarms.length === 0 && swActiveAlightAlarm === null) break;
-      await new Promise((resolve) => setTimeout(resolve, 15000));
-    }
-  } finally {
-    swMonitorRunning = false;
-  }
+  return outputArray;
 }
 
-// Handle direct notification dispatch and background alarm sync from client window
+// Pure event-driven Web Push handler (no long-running loops so Android Chrome never kills the SW)
+self.addEventListener('push', (event) => {
+  let data: any = {};
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch {
+      try {
+        data = { body: event.data.text() };
+      } catch {
+        data = {};
+      }
+    }
+  }
+
+  const payloadData = data.data || {};
+  const payloadType = payloadData.type || data.type || 'BUS_ALARM';
+  const isAlightAlarm = payloadType === 'ALIGHT_ALARM';
+  const isAlightPreAlert = payloadType === 'ALIGHT_PRE_ALERT';
+
+  const title =
+    data.title || (isAlightAlarm ? '⏰ ALIGHT NOW!' : '🚌 Bus Kaki Alert');
+
+  const actions =
+    isAlightAlarm || isAlightPreAlert
+      ? [
+          { action: 'alighted', title: '✅ I Have Alighted' },
+          { action: 'open', title: 'Open Ride HUD' },
+        ]
+      : [
+          { action: 'open', title: 'Open Bus Kaki' },
+          { action: 'dismiss', title: 'Dismiss' },
+        ];
+
+  const vibrate = isAlightAlarm
+    ? [800, 250, 800, 250, 1200, 250, 1200]
+    : isAlightPreAlert
+    ? [350, 150, 350]
+    : [500, 200, 500, 200, 1000];
+
+  const options: any = {
+    body: data.body || 'Your bus alert has triggered!',
+    icon: data.icon && !String(data.icon).endsWith('.svg') ? data.icon : '/icon-192.png',
+    badge: data.badge && !String(data.badge).endsWith('.svg') ? data.badge : '/icon-192.png',
+    tag: data.tag || `${isAlightAlarm ? 'alight-now' : 'bus-kaki'}-${Date.now()}`,
+    renotify: true,
+    silent: false,
+    timestamp: Date.now(),
+    data: payloadData,
+    vibrate,
+    requireInteraction: true,
+    actions,
+  };
+
+  const clientMessageType = isAlightAlarm
+    ? 'PUSH_ALIGHT_TRIGGERED'
+    : isAlightPreAlert
+    ? 'PUSH_ALIGHT_PRE_ALERT'
+    : 'PUSH_ALARM_TRIGGERED';
+
+  event.waitUntil(
+    Promise.all([
+      self.registration.showNotification(title, options as any),
+      self.clients
+        .matchAll({ type: 'window', includeUncontrolled: true })
+        .then((clientList) => {
+          for (const client of clientList) {
+            client.postMessage({
+              type: clientMessageType,
+              title,
+              body: options.body,
+              tag: options.tag,
+              data: options.data,
+            });
+          }
+        })
+        .catch(() => {}),
+    ])
+  );
+});
+
+// Auto-rotate and re-register FCM push subscription if Chrome refreshes the token in the background
+self.addEventListener('pushsubscriptionchange', (event: any) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        let vapidKey = FALLBACK_VAPID_PUBLIC_KEY;
+        try {
+          const res = await fetch(`${SW_API_BASE}/api/vapid-public-key`);
+          if (res.ok) {
+            const j = await res.json();
+            if (j?.publicKey) vapidKey = j.publicKey;
+          }
+        } catch {
+          // Use fallback VAPID key
+        }
+
+        const newSub = await self.registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidKey) as any,
+        });
+
+        const json = newSub.toJSON();
+        if (json.endpoint && json.keys?.p256dh && json.keys?.auth) {
+          await fetch(`${SW_API_BASE}/api/subscribe`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              endpoint: json.endpoint,
+              keys: {
+                p256dh: json.keys.p256dh,
+                auth: json.keys.auth,
+              },
+            }),
+          });
+        }
+      } catch (err) {
+        console.warn('SW pushsubscriptionchange recovery failed:', err);
+      }
+    })()
+  );
+});
+
+// Handle direct notification dispatch requests from client window (fast, single-shot, never loops)
 self.addEventListener('message', (event) => {
   if (!event.data) return;
 
@@ -292,16 +195,6 @@ self.addEventListener('message', (event) => {
         } as any)
       );
     }
-  } else if (event.data.type === 'SYNC_BUS_ALARMS') {
-    swActiveAlarms = Array.isArray(event.data.alarms) ? event.data.alarms : [];
-    if ((swActiveAlarms.length > 0 || swActiveAlightAlarm !== null) && !swMonitorRunning) {
-      event.waitUntil(runSwAlarmMonitorLoop());
-    }
-  } else if (event.data.type === 'SYNC_ALIGHT_ALARM') {
-    swActiveAlightAlarm = event.data.alarm && event.data.alarm.armed ? event.data.alarm : null;
-    if ((swActiveAlarms.length > 0 || swActiveAlightAlarm !== null) && !swMonitorRunning) {
-      event.waitUntil(runSwAlarmMonitorLoop());
-    }
   }
 });
 
@@ -312,7 +205,6 @@ self.addEventListener('notificationclick', (event) => {
 
   // 1-Tap Lock-Screen "I Have Alighted" Action: cancel server pulses & clear client alarm immediately
   if (event.action === 'alighted') {
-    swActiveAlightAlarm = null;
     event.waitUntil(
       (async () => {
         try {

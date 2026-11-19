@@ -1190,27 +1190,72 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: true });
     }
 
-    // 2b. Test / Instant Relay Web Push
+    // 2b. Test / Instant or Server-Delayed Web Push
     if (req.method === 'POST' && path.endsWith('/test-push')) {
       const body = await req.json().catch(() => ({}));
       const endpoint = body.endpoint;
+      const keys = body.keys;
+      const rawDelay = Number(body.delaySeconds ?? 0);
+      const delaySeconds = !isNaN(rawDelay) ? Math.min(Math.max(0, Math.round(rawDelay)), 30) : 0;
+
+      // Atomic subscription upsert if client includes keys
+      if (endpoint && keys && keys.p256dh && keys.auth) {
+        await supabase.from('pwa_push_subscriptions').upsert(
+          {
+            endpoint,
+            p256dh: keys.p256dh,
+            auth: keys.auth,
+            user_agent: req.headers.get('user-agent'),
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'endpoint' }
+        );
+      }
 
       const subObj = await resolveSubscriptionForEndpoint(endpoint || '');
       if (!subObj) {
         return jsonResponse({ error: 'No active push subscription found on server' }, 404);
       }
 
-      const pushResult = await sendPushNotification(subObj, {
-        title: body.title || '🚌 SG Bus Kaki Test Alert',
-        body: body.body || 'Success! Web Push is working in the background on your phone! 🔔✨',
+      const pushPayload = {
+        title: body.title || '🚌 SG Bus Kaki Background Alert',
+        body:
+          body.body ||
+          'Success! High-urgency Cloud Web Push woke your phone in the background! 🔔✨',
         icon: '/icon-192.png',
         badge: '/icon-192.png',
-        tag: body.tag || 'test-push-alert',
+        tag: body.tag || `test-push-${Date.now()}`,
         data: {
           type: body.type || 'TEST_PUSH',
           url: body.url || '/',
         },
-      });
+      };
+
+      // Server-side delay so user can lock screen / switch apps immediately after tapping Test
+      if (delaySeconds > 0) {
+        const edgeRuntime = (globalThis as any).EdgeRuntime;
+        const delayedTask = (async () => {
+          await new Promise((r) => setTimeout(r, delaySeconds * 1000));
+          await sendPushNotification(subObj, {
+            ...pushPayload,
+            tag: body.tag || `test-push-${Date.now()}`,
+          });
+        })();
+
+        if (edgeRuntime && typeof edgeRuntime.waitUntil === 'function') {
+          edgeRuntime.waitUntil(delayedTask);
+          return jsonResponse({
+            ok: true,
+            scheduled: true,
+            delaySeconds,
+            endpointPrefix: subObj.endpoint.slice(0, 52),
+          });
+        }
+        await delayedTask;
+        return jsonResponse({ ok: true, scheduled: false, delaySeconds });
+      }
+
+      const pushResult = await sendPushNotification(subObj, pushPayload);
 
       return jsonResponse({ ok: pushResult.success, result: pushResult });
     }
@@ -1218,10 +1263,24 @@ Deno.serve(async (req: Request) => {
     // 3. Set Bus Arrival Alarm
     if (req.method === 'POST' && path.endsWith('/bus-alarm')) {
       const body = await req.json();
-      const { endpoint, busStopCode, busStopName, serviceNo, leadMins = 3 } = body;
+      const { endpoint, keys, busStopCode, busStopName, serviceNo, leadMins = 3 } = body;
 
       if (!endpoint || !busStopCode || !serviceNo) {
         return jsonResponse({ error: 'Missing alarm parameters' }, 400);
+      }
+
+      // Atomic subscription upsert so FK constraint & fresh keys are guaranteed in 1 round-trip
+      if (keys && keys.p256dh && keys.auth) {
+        await supabase.from('pwa_push_subscriptions').upsert(
+          {
+            endpoint,
+            p256dh: keys.p256dh,
+            auth: keys.auth,
+            user_agent: req.headers.get('user-agent'),
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'endpoint' }
+        );
       }
 
       const { data, error } = await supabase

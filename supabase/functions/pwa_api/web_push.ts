@@ -52,15 +52,23 @@ export async function sendPushNotification(
   try {
     const stringified = JSON.stringify(payload);
     const result = await webpush.sendNotification(subscription, stringified, {
-      TTL: 300,
+      TTL: 120,
       urgency: 'high',
-      headers: {
-        Urgency: 'high',
-      },
+      contentEncoding: 'aes128gcm',
     });
+    console.log(
+      `[WebPush] OK status=${result.statusCode} endpoint=${subscription.endpoint.slice(0, 52)}... tag=${payload.tag || 'none'}`
+    );
     return { success: true, statusCode: result.statusCode };
   } catch (err: any) {
-    console.error('Failed to send push notification:', err?.statusCode, err?.message);
-    return { success: false, error: err?.message, statusCode: err?.statusCode };
+    console.error(
+      `[WebPush] FAIL status=${err?.statusCode} msg=${err?.message} body=${err?.body || ''} endpoint=${subscription.endpoint.slice(0, 52)}...`
+    );
+    return {
+      success: false,
+      error: err?.message,
+      statusCode: err?.statusCode,
+      body: err?.body,
+    };
   }
 }

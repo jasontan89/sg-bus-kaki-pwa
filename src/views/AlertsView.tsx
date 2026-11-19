@@ -32,7 +32,6 @@ import {
   unlockAudio,
   formatDistance,
   stopContinuousChime,
-  startBackgroundAudioKeepAlive,
 } from '../services/alarmManager';
 import { getStoredBusAlarms, removeStoredBusAlarm } from '../services/alarmStorage';
 import { AlightingAlarmState, BusArrivalAlarm } from '../types/transit';
@@ -182,7 +181,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
 
   const handleTestServerPush = async () => {
     unlockAudio();
-    startBackgroundAudioKeepAlive('Cloud Push Test');
     setTestingCloudPush(true);
     try {
       const perm = await requestNotificationPermission();
@@ -200,18 +198,20 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       }
 
       const serialized = serializeSubscription(sub);
-      await registerPushSubscription({
-        ...serialized,
-        mrt_lines: selectedLines,
-        alert_filter: alertFilter,
+
+      // IMPORTANT: Send request to Supabase IMMEDIATELY with server-side delaySeconds: 6!
+      // Previously, setTimeout(4000) ran inside the browser tab, which Android froze the moment
+      // the user switched apps or locked the screen — preventing the push from ever being sent.
+      const res = await sendTestPushNotification(serialized.endpoint, {
+        keys: serialized.keys,
+        delaySeconds: 6,
       });
 
-      onShowToast('Switch out of PWA or lock your screen now! Cloud alert arriving in 4s...', 'info');
-      await new Promise((resolve) => setTimeout(resolve, 4000));
-
-      const res = await sendTestPushNotification(sub.endpoint);
       if (res.ok) {
-        onShowToast('Cloud Web Push delivered! 🔔✨', 'success');
+        onShowToast(
+          '✅ Cloud timer armed! Switch to another app or lock screen NOW — push arriving in 6s...',
+          'success'
+        );
       } else {
         onShowToast(`Cloud push note: ${res.error || 'Check server status'}`, 'error');
       }
@@ -428,14 +428,14 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
             onClick={handleTestServerPush}
             disabled={testingCloudPush}
             className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-brand-blue/30 to-brand-sky/30 border border-brand-sky/50 hover:bg-brand-blue/40 text-xs font-bold text-brand-sky flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow-sm"
-            title="Sends a real push notification through Google FCM from the server"
+            title="Arms a 6-second server-side cloud timer via Google FCM so you can switch apps immediately"
           >
             {testingCloudPush ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-sky" />
             ) : (
               <Send className="w-3.5 h-3.5 text-brand-sky" />
             )}
-            <span>Test Cloud Push (Screen Off)</span>
+            <span>Test Cloud Push (6s Delay)</span>
           </button>
 
           <button
@@ -446,6 +446,34 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
             <span>Test Chime & Sound</span>
           </button>
         </div>
+
+        {/* Android / Xiaomi HyperOS / Samsung Background Delivery Checklist */}
+        <details className="rounded-xl bg-amber-950/25 border border-amber-700/40 text-[11px] text-slate-300">
+          <summary className="px-3 py-2 cursor-pointer font-bold text-amber-300 select-none">
+            ⚠️ Alerts only pop up when reopening app? (Xiaomi / Android 1-Time Fix)
+          </summary>
+          <div className="px-3 pb-3 pt-1 space-y-1.5 text-slate-300 leading-relaxed border-t border-amber-800/30">
+            <p className="text-slate-400">
+              Xiaomi HyperOS / MIUI &amp; some Android skins freeze installed PWAs &amp; Chrome in the background by default, holding FCM pushes until you reopen the app:
+            </p>
+            <ol className="list-decimal list-inside space-y-1 text-[11px]">
+              <li>
+                <strong className="text-white">Long-press Bus Kaki icon → App info:</strong> set{' '}
+                <span className="text-amber-200 font-semibold">Battery saver → No restrictions</span>, turn{' '}
+                <span className="text-amber-200 font-semibold">Autostart ON</span>, and enable{' '}
+                <span className="text-amber-200 font-semibold">Floating + Lock screen notifications + Sound</span>.
+              </li>
+              <li>
+                <strong className="text-white">Repeat for Google Chrome</strong> (<em>Settings → Apps → Manage apps → Chrome</em>): set{' '}
+                <span className="text-amber-200 font-semibold">Battery saver → No restrictions</span> &amp;{' '}
+                <span className="text-amber-200 font-semibold">Background autostart ON</span> (Chrome delivers all WebAPK pushes).
+              </li>
+              <li>
+                <strong className="text-white">Test:</strong> Tap <em>Test Cloud Push (6s Delay)</em> above, immediately switch to another app, and wait 6 seconds.
+              </li>
+            </ol>
+          </div>
+        </details>
       </div>
 
       {/* MRT Lines Disruption Push Alerts */}

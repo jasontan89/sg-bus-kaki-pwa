@@ -192,10 +192,11 @@ export async function registerPushSubscription(payload: {
 }
 
 /**
- * Schedule bus arrival alarm in Supabase
+ * Schedule bus arrival alarm in Supabase (with optional atomic subscription keys upsert)
  */
 export async function createBusArrivalAlarm(payload: {
   endpoint: string;
+  keys?: { p256dh: string; auth: string };
   busStopCode: string;
   busStopName: string;
   serviceNo: string;
@@ -205,6 +206,7 @@ export async function createBusArrivalAlarm(payload: {
     method: 'POST',
     headers: defaultHeaders,
     body: JSON.stringify(payload),
+    keepalive: true,
   });
   if (!res.ok) throw new Error('Failed to schedule arrival alarm');
   return await res.json();
@@ -254,6 +256,7 @@ export async function createCloudAlightAlarm(payload: {
     method: 'POST',
     headers: defaultHeaders,
     body: JSON.stringify(payload),
+    keepalive: true,
   });
   if (!res.ok) throw new Error(`Failed to arm cloud alight alarm (${res.status})`);
   return await res.json();
@@ -333,17 +336,32 @@ export async function deleteCloudAlightAlarm(
 }
 
 /**
- * Dispatches a real push notification from backend server down to phone via Google FCM
+ * Dispatches a real push notification from backend server down to phone via Google FCM.
+ * Supports server-side delaySeconds so the user can switch apps / lock screen immediately!
  */
 export async function sendTestPushNotification(
   endpoint?: string,
-  customPayload?: { title?: string; body?: string; tag?: string; url?: string }
-): Promise<{ ok: boolean; error?: string }> {
+  customPayload?: {
+    keys?: { p256dh: string; auth: string };
+    delaySeconds?: number;
+    title?: string;
+    body?: string;
+    tag?: string;
+    url?: string;
+  }
+): Promise<{
+  ok: boolean;
+  scheduled?: boolean;
+  delaySeconds?: number;
+  result?: { success?: boolean; statusCode?: number; error?: string };
+  error?: string;
+}> {
   try {
     const res = await fetch(`${BASE_API_URL}/api/test-push`, {
       method: 'POST',
       headers: defaultHeaders,
       body: JSON.stringify({ endpoint, ...customPayload }),
+      keepalive: true,
     });
     return await res.json();
   } catch (err: any) {
